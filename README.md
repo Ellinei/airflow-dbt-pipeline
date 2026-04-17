@@ -11,9 +11,9 @@ A portfolio-grade data engineering project that wires together **Apache Airflow 
 │  Docker network                                               │
 │                                                               │
 │  ┌─────────────────┐     metadata      ┌──────────────────┐   │
-│  │ Airflow         │ ◄──────────────► │ postgres_airflow │    │
-│  │  · webserver    │    (port 5432)   │ (Airflow DB)     │    │
-│  │  · scheduler    │                  └──────────────────┘    │
+│  │ Airflow         │ ◄──────────────►  │ postgres_airflow │   │
+│  │  · webserver    │    (port 5432)    │ (Airflow DB)     │   │
+│  │  · scheduler    │                   └──────────────────┘   │
 │  │                 │                                          │
 │  │  [dbt_pipeline] │   dbt run/test   ┌───────────────────┐   │
 │  │  · dbt_seed     │ ──────────────►  │ postgres_warehouse│   │
