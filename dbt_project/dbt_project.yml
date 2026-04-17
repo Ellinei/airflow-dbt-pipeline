@@ -1,0 +1,32 @@
+name: "dbt_warehouse"
+version: "1.0.0"
+config-version: 2
+
+# Profile name must match the key in profiles.yml
+profile: "dbt_warehouse"
+
+# File paths (relative to this file)
+model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+analysis-paths: ["analyses"]
+
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+# ── Model materialisation defaults ────────────────────────────────────────────
+models:
+  dbt_warehouse:
+    staging:
+      +materialized: view      # Staging stays as views — cheap, always fresh
+      +schema: staging
+    marts:
+      +materialized: table     # Marts are tables — fast for BI tools to query
+      +schema: marts
+
+# ── Seed defaults ─────────────────────────────────────────────────────────────
+seeds:
+  dbt_warehouse:
+    +schema: raw               # Seeds land in the "raw" schema
