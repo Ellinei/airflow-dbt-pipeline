@@ -1,0 +1,66 @@
+version: 2
+
+models:
+  - name: stg_customers
+    description: "Cleaned and type-cast customer records from the raw seed."
+    columns:
+      - name: customer_id
+        description: "Surrogate integer key for each customer."
+        tests:
+          - not_null
+          - unique
+
+      - name: email
+        description: "Lowercased customer email address."
+        tests:
+          - not_null
+          - unique
+
+      - name: first_name
+        description: "Customer first name (trimmed whitespace)."
+        tests:
+          - not_null
+
+      - name: country_code
+        description: "ISO 3166-1 alpha-2 country code (uppercased)."
+        tests:
+          - not_null
+
+      - name: created_at
+        description: "Date the customer record was created."
+        tests:
+          - not_null
+
+  - name: stg_orders
+    description: "Cleaned and type-cast order records from the raw seed."
+    columns:
+      - name: order_id
+        description: "Unique integer identifier for each order."
+        tests:
+          - not_null
+          - unique
+
+      - name: customer_id
+        description: "Foreign key referencing stg_customers.customer_id."
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_customers')
+              field: customer_id
+
+      - name: order_date
+        description: "Date the order was placed."
+        tests:
+          - not_null
+
+      - name: status
+        description: "Current order status (lowercased)."
+        tests:
+          - not_null
+          - accepted_values:
+              values: ["completed", "shipped", "pending", "cancelled"]
+
+      - name: amount
+        description: "Order value in USD."
+        tests:
+          - not_null

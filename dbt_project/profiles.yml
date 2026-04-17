@@ -1,0 +1,21 @@
+# dbt connection profiles
+# ──────────────────────────────────────────────────────────────────────────────
+# This file is mounted into the Airflow containers at /opt/airflow/dbt_project/
+# and referenced via --profiles-dir in dbt CLI calls.
+#
+# Credentials are pulled from environment variables so nothing is hard-coded.
+# The variables are injected by docker-compose from the .env file.
+
+dbt_warehouse:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: postgres_warehouse          # Docker service name — resolves inside the network
+      port: 5432                        # Internal container port (not the host 5433)
+      user: "{{ env_var('WAREHOUSE_DB_USER') }}"
+      password: "{{ env_var('WAREHOUSE_DB_PASSWORD') }}"
+      dbname: "{{ env_var('WAREHOUSE_DB_NAME') }}"
+      schema: public                    # Default schema; models override via +schema config
+      threads: 4
+      connect_timeout: 10

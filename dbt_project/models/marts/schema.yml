@@ -1,0 +1,39 @@
+version: 2
+
+models:
+  - name: mart_customer_orders
+    description: >
+      One row per customer enriched with aggregated order metrics.
+      This is the primary mart consumed by BI dashboards (e.g. Power BI).
+    columns:
+      - name: customer_id
+        description: "Primary key — unique per customer."
+        tests:
+          - not_null
+          - unique
+
+      - name: email
+        description: "Customer email — unique identifier."
+        tests:
+          - not_null
+          - unique
+
+      - name: lifetime_value
+        description: "Sum of all order amounts across the customer's history."
+        tests:
+          - not_null
+
+      - name: total_orders
+        description: "Total number of orders placed by the customer."
+        tests:
+          - not_null
+
+      - name: completed_orders
+        description: "Count of orders with status = 'completed'."
+        tests:
+          - not_null
+
+      - name: cancelled_orders
+        description: "Count of orders with status = 'cancelled'."
+        tests:
+          - not_null
