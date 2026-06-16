@@ -5,6 +5,14 @@ models:
     description: >
       One row per customer enriched with aggregated order metrics.
       This is the primary mart consumed by BI dashboards (e.g. Power BI).
+    meta:
+      owner: Ellinei
+      team: Analytics
+      tier: Tier 1
+    tags:
+      - mart
+      - customers
+      - BI-ready
     columns:
       - name: customer_id
         description: "Primary key — unique per customer."
@@ -22,6 +30,8 @@ models:
         description: "Sum of all order amounts across the customer's history."
         tests:
           - not_null
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
 
       - name: total_orders
         description: "Total number of orders placed by the customer."
@@ -37,3 +47,30 @@ models:
         description: "Count of orders with status = 'cancelled'."
         tests:
           - not_null
+
+  - name: mart_customer_orders_masked
+    description: >
+      Analyst-facing view of mart_customer_orders with the email column masked
+      (shows only the first character plus the domain, e.g. a****@example.com).
+      The analyst role is granted SELECT on this view only — never on the raw mart.
+    meta:
+      owner: Ellinei
+      team: Data Engineering
+      tier: Tier 1
+    tags:
+      - mart
+      - customers
+      - PII-masked
+    columns:
+      - name: customer_id
+        description: "Primary key — unique per customer."
+      - name: email
+        description: "Masked email — first character + **** + @domain."
+      - name: lifetime_value
+        description: "Sum of all order amounts across the customer's history."
+      - name: total_orders
+        description: "Total number of orders placed by the customer."
+      - name: completed_orders
+        description: "Count of orders with status = 'completed'."
+      - name: cancelled_orders
+        description: "Count of orders with status = 'cancelled'."

@@ -32,4 +32,7 @@ RUN pip install --no-cache-dir \
         "psycopg2-binary>=2.9.6" \
         "dbt-core==1.8.0" \
         "astronomer-cosmos==1.4.3" \
+        "mlflow>=2.13.0,<3.0.0" \
+        "scikit-learn>=1.4.0,<2.0.0" \
+        "openai>=1.30.0,<2.0.0" \
     && pip install --no-cache-dir --no-deps "dbt-postgres==1.8.0"
