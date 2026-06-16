@@ -22,9 +22,11 @@ models:
     staging:
       +materialized: view      # Staging stays as views — cheap, always fresh
       +schema: staging
+      +post-hook: "{{ grant_select('engineer') }}"
     marts:
       +materialized: table     # Marts are tables — fast for BI tools to query
       +schema: marts
+      +post-hook: "{{ grant_select('engineer') }}"
 
 # ── Seed defaults ─────────────────────────────────────────────────────────────
 seeds:

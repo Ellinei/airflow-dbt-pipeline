@@ -3,6 +3,14 @@ version: 2
 models:
   - name: stg_customers
     description: "Cleaned and type-cast customer records from the raw seed."
+    meta:
+      owner: Ellinei
+      team: Data Engineering
+      tier: Tier 1
+    tags:
+      - staging
+      - customers
+      - PII
     columns:
       - name: customer_id
         description: "Surrogate integer key for each customer."
@@ -15,6 +23,8 @@ models:
         tests:
           - not_null
           - unique
+          - dbt_utils.expression_is_true:
+              expression: "like '%@%'"
 
       - name: first_name
         description: "Customer first name (trimmed whitespace)."
@@ -33,6 +43,13 @@ models:
 
   - name: stg_orders
     description: "Cleaned and type-cast order records from the raw seed."
+    meta:
+      owner: Ellinei
+      team: Data Engineering
+      tier: Tier 1
+    tags:
+      - staging
+      - orders
     columns:
       - name: order_id
         description: "Unique integer identifier for each order."
@@ -64,3 +81,5 @@ models:
         description: "Order value in USD."
         tests:
           - not_null
+          - dbt_utils.expression_is_true:
+              expression: "> 0"

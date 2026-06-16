@@ -3,6 +3,7 @@
 #  Airflow + dbt + PostgreSQL — local development stack
 #  Airflow UI  → http://localhost:8080  (admin / admin)
 #  Warehouse   → localhost:5433         (warehouse / warehouse / warehouse)
+#  OM Catalog  → http://localhost:8585  (admin / admin)  [--profile catalog]
 # ══════════════════════════════════════════════════════════════════════════════
 version: "3.8"
 
@@ -32,6 +33,9 @@ x-airflow-common: &airflow-common
     # manifest schema ≤v7, but dbt 1.8 produces v12 → post-run crash despite
     # dbt itself succeeding.  Disabling prevents the AirflowCompatibilityError.
     OPENLINEAGE_DISABLED: "true"
+    SLACK_WEBHOOK_URL: "${SLACK_WEBHOOK_URL}"
+    MLFLOW_TRACKING_URI: "http://mlflow-server:5000"
+    OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
   volumes:
     - ./dags:/opt/airflow/dags
     - ./logs:/opt/airflow/logs
@@ -67,7 +71,7 @@ services:
 
   # ── 2. Data warehouse database ───────────────────────────────────────────────
   postgres_warehouse:
-    image: postgres:15
+    image: pgvector/pgvector:pg15
     container_name: postgres_warehouse
     environment:
       POSTGRES_USER: "${WAREHOUSE_DB_USER}"
@@ -83,6 +87,7 @@ services:
       start_period: 10s
     volumes:
       - warehouse_postgres_data:/var/lib/postgresql/data
+      - ./warehouse-init:/docker-entrypoint-initdb.d:ro
     restart: unless-stopped
 
   # ── 3. One-shot init container ───────────────────────────────────────────────
@@ -94,6 +99,11 @@ services:
     command:
       - -c
       - |
+        echo "📦 Installing dbt packages (needed before scheduler parse)..."
+        /home/airflow/.local/bin/dbt deps \
+          --project-dir /opt/airflow/dbt_project \
+          --profiles-dir /opt/airflow/dbt_project
+        echo "✅ dbt packages installed."
         echo "⏳ Migrating Airflow metadata DB..."
         airflow db migrate
         echo "✅ DB migrated — creating admin user..."
@@ -137,7 +147,126 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
+  # ── 6. MLflow tracking server ────────────────────────────────────────────────
+  mlflow-server:
+    container_name: mlflow_server
+    image: ghcr.io/mlflow/mlflow:v2.15.0
+    profiles: ["mlops"]
+    command: >
+      mlflow server
+      --backend-store-uri sqlite:////mlflow/mlflow.db
+      --default-artifact-root /mlflow/artifacts
+      --host 0.0.0.0
+      --port 5000
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow-data:/mlflow
+    restart: unless-stopped
+
+  # ── 7. OpenMetadata MySQL backend ─────────────────────────────────────────────
+  openmetadata-mysql:
+    container_name: openmetadata_mysql
+    image: docker.getcollate.io/openmetadata/db:1.4.8
+    profiles: ["catalog"]
+    command: "--sort_buffer_size=10M"
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: om_root_password
+    expose:
+      - 3306
+    healthcheck:
+      test: mysql --user=root --password=om_root_password --silent --execute "use openmetadata_db"
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    volumes:
+      - om-mysql-data:/var/lib/mysql
+
+  # ── 7. Elasticsearch for OM ───────────────────────────────────────────────────
+  openmetadata-elasticsearch:
+    container_name: openmetadata_elasticsearch
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.10.2
+    profiles: ["catalog"]
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms1024m -Xmx1024m
+      - xpack.security.enabled=false
+    expose:
+      - 9200
+    healthcheck:
+      test: "curl -s http://localhost:9200/_cluster/health | grep -qE 'green|yellow'"
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    volumes:
+      - om-es-data:/usr/share/elasticsearch/data
+
+  # ── 8. One-shot DB migration (must complete before server starts) ─────────────
+  openmetadata-migrate:
+    container_name: openmetadata_migrate
+    image: docker.getcollate.io/openmetadata/server:1.4.8
+    profiles: ["catalog"]
+    command: "./bootstrap/openmetadata-ops.sh migrate"
+    environment: &om-server-env
+      DB_DRIVER_CLASS: com.mysql.cj.jdbc.Driver
+      DB_SCHEME: mysql
+      DB_PARAMS: "allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=UTC"
+      DB_USER: openmetadata_user
+      DB_USER_PASSWORD: openmetadata_password
+      DB_HOST: openmetadata-mysql
+      DB_PORT: "3306"
+      OM_DATABASE: openmetadata_db
+      ELASTICSEARCH_HOST: openmetadata-elasticsearch
+      ELASTICSEARCH_PORT: "9200"
+      ELASTICSEARCH_SCHEME: http
+      SEARCH_TYPE: elasticsearch
+      PIPELINE_SERVICE_CLIENT_ENABLED: "false"
+      OPENMETADATA_HEAP_OPTS: "-Xmx1G -Xms1G"
+      JWT_ISSUER: "open-metadata.org"
+      JWT_KEY_ID: "Gb389a-9f76-gdjs-a92j-0242bk94356"
+      AUTHENTICATION_PROVIDER: basic
+      AUTHORIZER_CLASS_NAME: org.openmetadata.service.security.DefaultAuthorizer
+      AUTHORIZER_ADMIN_PRINCIPALS: "[admin]"
+      AUTHORIZER_INGESTION_PRINCIPALS: "[ingestion-bot]"
+      AUTHORIZER_PRINCIPAL_DOMAIN: "openmetadata.org"
+    restart: "no"
+    depends_on:
+      openmetadata-mysql:
+        condition: service_healthy
+      openmetadata-elasticsearch:
+        condition: service_healthy
+
+  # ── 9. OpenMetadata server ────────────────────────────────────────────────────
+  openmetadata-server:
+    container_name: openmetadata_server
+    image: docker.getcollate.io/openmetadata/server:1.4.8
+    profiles: ["catalog"]
+    environment: *om-server-env
+    ports:
+      - "8585:8585"
+    restart: unless-stopped
+    depends_on:
+      openmetadata-migrate:
+        condition: service_completed_successfully
+
+  # ── 10. OM ingestion CLI (one-shot, invoked manually) ─────────────────────────
+  openmetadata-ingestion:
+    container_name: openmetadata_ingestion
+    image: docker.getcollate.io/openmetadata/ingestion:1.4.8
+    profiles: ["catalog"]
+    entrypoint: metadata
+    volumes:
+      - ./openmetadata:/config
+      - ./dbt_project/target:/opt/dbt_project/target:ro
+    # Usage:
+    #   docker-compose --profile catalog run --rm openmetadata-ingestion ingest -c /config/postgres_ingestion.yaml
+    #   docker-compose --profile catalog run --rm openmetadata-ingestion ingest -c /config/dbt_ingestion.yaml
+
 # ── Named volumes ──────────────────────────────────────────────────────────────
 volumes:
   airflow_postgres_data:
   warehouse_postgres_data:
+  om-mysql-data:
+  om-es-data:
+  mlflow-data:

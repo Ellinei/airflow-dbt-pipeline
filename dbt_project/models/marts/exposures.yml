@@ -1,0 +1,14 @@
+version: 2
+
+exposures:
+  - name: customer_orders_dashboard
+    type: dashboard
+    maturity: medium
+    description: >
+      Customer orders dashboard — lifetime value, order counts,
+      and order status breakdown per customer.
+    depends_on:
+      - ref('mart_customer_orders')
+    owner:
+      name: Ellinei
+      email: nonamex01@outlook.com
