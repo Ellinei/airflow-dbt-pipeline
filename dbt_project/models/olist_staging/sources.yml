@@ -1,0 +1,22 @@
+version: 2
+
+sources:
+  - name: olist_raw
+    schema: raw   # literal Postgres schema created by ingest_olist — NOT dbt's
+                  # own "public_raw" seed schema (see the toy demo's raw_customers/
+                  # raw_orders, which live in public_raw via dbt's default
+                  # generate_schema_name behavior). source() blocks are never
+                  # passed through that macro, so this value is taken literally.
+    description: >
+      Raw Olist Brazilian E-Commerce CSVs, landed by the ingest_olist Airflow
+      task (dags/dbt_pipeline_dag.py) via pandas + SQLAlchemy.
+    tables:
+      - name: olist_customers
+      - name: olist_orders
+      - name: olist_order_items
+      - name: olist_order_payments
+      - name: olist_order_reviews
+      - name: olist_products
+      - name: olist_sellers
+      - name: olist_geolocation
+      - name: olist_product_category_translation

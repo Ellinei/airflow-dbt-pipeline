@@ -1,0 +1,174 @@
+version: 2
+
+models:
+  - name: stg_olist_customers
+    description: "Cleaned and type-cast Olist customer records. customer_id is order-scoped; customer_unique_id is the real repeat-customer key."
+    meta:
+      owner: Ellinei
+      team: Data Engineering
+      tier: Tier 2
+    tags: [staging, olist, customers]
+    columns:
+      - name: customer_id
+        description: "Order-scoped customer identifier (Olist mints a new one per order)."
+        tests: [not_null, unique]
+      - name: customer_unique_id
+        description: "The real repeat-customer identifier — use this for customer-level grouping."
+        tests: [not_null]
+
+  - name: stg_olist_orders
+    description: "Cleaned and type-cast Olist order records."
+    meta:
+      owner: Ellinei
+      team: Data Engineering
+      tier: Tier 2
+    tags: [staging, olist, orders]
+    columns:
+      - name: order_id
+        description: "Unique identifier for each order."
+        tests: [not_null, unique]
+      - name: customer_id
+        description: "Foreign key referencing stg_olist_customers.customer_id."
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_olist_customers')
+              field: customer_id
+      - name: order_status
+        description: "Current order status (lowercased)."
+        tests:
+          - not_null
+          - accepted_values:
+              values: ["created", "invoiced", "processing", "unavailable", "shipped", "delivered", "canceled", "approved"]
+
+  - name: stg_olist_order_items
+    description: "Cleaned and type-cast Olist order line items — one row per item within an order."
+    meta:
+      owner: Ellinei
+      team: Data Engineering
+      tier: Tier 2
+    tags: [staging, olist, orders]
+    columns:
+      - name: order_id
+        description: "Foreign key referencing stg_olist_orders.order_id."
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_olist_orders')
+              field: order_id
+      - name: seller_id
+        description: "Foreign key referencing stg_olist_sellers.seller_id."
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_olist_sellers')
+              field: seller_id
+      - name: price
+        description: "Item price."
+        tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+
+  - name: stg_olist_order_payments
+    description: "Cleaned and type-cast Olist payment records — one row per payment installment/method per order."
+    meta:
+      owner: Ellinei
+      team: Data Engineering
+      tier: Tier 2
+    tags: [staging, olist, orders]
+    columns:
+      - name: order_id
+        description: "Foreign key referencing stg_olist_orders.order_id."
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_olist_orders')
+              field: order_id
+      - name: payment_type
+        description: "Payment method (lowercased)."
+        tests:
+          - not_null
+          - accepted_values:
+              values: ["credit_card", "boleto", "voucher", "debit_card", "not_defined"]
+      - name: payment_value
+        description: "Payment amount."
+        tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+
+  - name: stg_olist_order_reviews
+    description: "Cleaned and type-cast Olist customer review records."
+    meta:
+      owner: Ellinei
+      team: Data Engineering
+      tier: Tier 2
+    tags: [staging, olist, reviews]
+    columns:
+      - name: review_id
+        description: "Unique identifier for each review."
+        tests: [not_null]
+      - name: order_id
+        description: "Foreign key referencing stg_olist_orders.order_id."
+        tests:
+          - not_null
+          - relationships:
+              to: ref('stg_olist_orders')
+              field: order_id
+      - name: review_score
+        description: "Customer review score, 1-5."
+        tests:
+          - not_null
+          - accepted_values:
+              values: [1, 2, 3, 4, 5]
+
+  - name: stg_olist_products
+    description: "Cleaned and type-cast Olist product records (fixes upstream 'lenght' column-name typos)."
+    meta:
+      owner: Ellinei
+      team: Data Engineering
+      tier: Tier 2
+    tags: [staging, olist, products]
+    columns:
+      - name: product_id
+        description: "Unique identifier for each product."
+        tests: [not_null, unique]
+
+  - name: stg_olist_sellers
+    description: "Cleaned and type-cast Olist seller records."
+    meta:
+      owner: Ellinei
+      team: Data Engineering
+      tier: Tier 2
+    tags: [staging, olist, sellers]
+    columns:
+      - name: seller_id
+        description: "Unique identifier for each seller."
+        tests: [not_null, unique]
+
+  - name: stg_olist_geolocation
+    description: >
+      Olist zip-code-prefix geolocation, aggregated to one row per prefix
+      (raw table has ~1M rows with duplicate lat/lng per prefix).
+    meta:
+      owner: Ellinei
+      team: Data Engineering
+      tier: Tier 3
+    tags: [staging, olist, geolocation]
+    columns:
+      - name: geolocation_zip_code_prefix
+        description: "Zip-code prefix — one row per prefix after aggregation."
+        tests: [not_null, unique]
+
+  - name: stg_olist_product_category_translation
+    description: "Maps Olist's Portuguese product category names to English."
+    meta:
+      owner: Ellinei
+      team: Data Engineering
+      tier: Tier 3
+    tags: [staging, olist, products]
+    columns:
+      - name: product_category_name
+        description: "Portuguese product category name."
+        tests: [not_null, unique]
