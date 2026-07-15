@@ -12,3 +12,16 @@ exposures:
     owner:
       name: Ellinei
       email: nonamex01@outlook.com
+
+  - name: olist_ecommerce_dashboard
+    type: dashboard
+    maturity: low
+    description: >
+      Olist e-commerce dashboard — customer lifetime value and seller
+      performance at real (~100k order) scale.
+    depends_on:
+      - ref('mart_olist_customer_orders')
+      - ref('mart_olist_seller_performance')
+    owner:
+      name: Ellinei
+      email: nonamex01@outlook.com

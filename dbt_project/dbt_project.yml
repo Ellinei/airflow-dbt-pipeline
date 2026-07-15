@@ -27,6 +27,14 @@ models:
       +materialized: table     # Marts are tables — fast for BI tools to query
       +schema: marts
       +post-hook: "{{ grant_select('engineer') }}"
+    olist_staging:
+      +materialized: view
+      +schema: olist_staging
+      +post-hook: "{{ grant_select('engineer') }}"
+    olist_marts:
+      +materialized: table
+      +schema: olist_marts
+      +post-hook: "{{ grant_select('engineer') }}"
 
 # ── Seed defaults ─────────────────────────────────────────────────────────────
 seeds:

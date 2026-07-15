@@ -12,6 +12,25 @@
 #   dbt-postgres is installed --no-deps because its only two dependencies
 #   (dbt-core and psycopg2) are already satisfied above.
 #
+# Why pandas is installed --no-deps in its own step, and SQLAlchemy is NOT pinned?
+#   Both already ride in transitively via mlflow's own dependencies. Adding
+#   them as top-level pinned requirements in the SAME pip install as
+#   astronomer-cosmos/mlflow/scikit-learn/openai forces pip's resolver to
+#   jointly re-solve the entire dependency graph (including apache-airflow's,
+#   since cosmos depends on it), which triggers catastrophic backtracking
+#   ("pip is looking at multiple versions of flask-appbuilder... this could
+#   take a while" — observed to run 60+ minutes without finishing). Installing
+#   pandas --no-deps in its own step verifies/upgrades the already-satisfied
+#   version without re-resolving anything else.
+#   SQLAlchemy is deliberately left un-pinned: Airflow 2.9.1's own ORM models
+#   (e.g. TaskInstance) use SQLAlchemy 1.4-style declarative annotations that
+#   are NOT compatible with SQLAlchemy 2.0's Mapped[] typing requirements —
+#   forcing an upgrade to 2.0 crashloops the webserver/scheduler with
+#   `sqlalchemy.orm.exc.MappedAnnotationError` (confirmed empirically). The
+#   transitively-installed 1.4.x is what Airflow itself requires, and it's
+#   sufficient for the ingest_olist task (engine.begin()/text()/df.to_sql()
+#   are all supported since SQLAlchemy 1.4).
+#
 # Why gcc?
 #   logbook (a dbt-core dependency) lacks a pre-built wheel for Python 3.12,
 #   so it must be compiled from source. gcc + the Python headers that come
@@ -36,3 +55,8 @@ RUN pip install --no-cache-dir \
         "scikit-learn>=1.4.0,<2.0.0" \
         "openai>=1.30.0,<2.0.0" \
     && pip install --no-cache-dir --no-deps "dbt-postgres==1.8.0"
+
+# Kept as its own layer (not chained with `&&` above) so this line is the
+# only one that invalidates on changes to the pandas pin — the heavy install
+# above stays cache-identical to prior builds.
+RUN pip install --no-cache-dir --no-deps "pandas>=2.0.0,<3.0.0"

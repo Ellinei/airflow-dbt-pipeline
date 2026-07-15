@@ -1,0 +1,47 @@
+version: 2
+
+models:
+  - name: mart_olist_customer_orders
+    description: >
+      One row per unique Olist customer (grouped by customer_unique_id, not
+      the order-scoped customer_id) enriched with aggregated order metrics.
+    meta:
+      owner: Ellinei
+      team: Analytics
+      tier: Tier 2
+    tags: [mart, olist, customers, BI-ready]
+    columns:
+      - name: customer_unique_id
+        description: "Primary key — unique per real-world customer."
+        tests: [not_null, unique]
+      - name: lifetime_value
+        description: "Sum of payment amounts across the customer's order history."
+        tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: total_orders
+        description: "Total number of orders placed by the customer."
+        tests: [not_null]
+
+  - name: mart_olist_seller_performance
+    description: >
+      One row per Olist seller with revenue, freight, and review-score
+      aggregates across all their order items.
+    meta:
+      owner: Ellinei
+      team: Analytics
+      tier: Tier 2
+    tags: [mart, olist, sellers, BI-ready]
+    columns:
+      - name: seller_id
+        description: "Primary key — unique per seller."
+        tests: [not_null, unique]
+      - name: total_revenue
+        description: "Sum of item prices sold by this seller (excludes freight)."
+        tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: avg_review_score
+        description: "Average customer review score (1-5) across the seller's order items."

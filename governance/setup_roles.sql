@@ -11,8 +11,17 @@
 -- engineer: full read access to all schemas, sees raw PII
 -- analyst:  read access only to the masked mart view, email is hidden
 
-CREATE ROLE IF NOT EXISTS engineer NOLOGIN;
-CREATE ROLE IF NOT EXISTS analyst  NOLOGIN;
+-- Postgres has no CREATE ROLE IF NOT EXISTS syntax (unlike CREATE SCHEMA/TABLE) —
+-- use the same DO-block + duplicate_object idiom as the users/policies below.
+DO $$ BEGIN
+  CREATE ROLE engineer NOLOGIN;
+EXCEPTION WHEN duplicate_object THEN RAISE NOTICE 'role engineer already exists';
+END $$;
+
+DO $$ BEGIN
+  CREATE ROLE analyst NOLOGIN;
+EXCEPTION WHEN duplicate_object THEN RAISE NOTICE 'role analyst already exists';
+END $$;
 
 -- Demo login users (for manual psql verification)
 DO $$ BEGIN
@@ -73,4 +82,43 @@ DO $$ BEGIN
     FOR SELECT TO analyst
     USING (completed_orders > 0);
 EXCEPTION WHEN duplicate_object THEN RAISE NOTICE 'analyst_completed_only already exists';
+END $$;
+
+-- ── 5. Olist schemas — grants + RLS ────────────────────────────────────────────
+-- Olist's customer table carries no name/email (only IDs, zip prefix, city,
+-- state) — materially less PII pressure than the toy demo's mart, so analyst
+-- gets a direct grant on both new marts instead of a masked view.
+
+GRANT USAGE ON SCHEMA raw                  TO engineer;
+GRANT USAGE ON SCHEMA public_olist_staging TO engineer;
+GRANT USAGE ON SCHEMA public_olist_marts   TO engineer;
+GRANT USAGE ON SCHEMA public_olist_marts   TO analyst;
+
+GRANT SELECT ON ALL TABLES IN SCHEMA raw                  TO engineer;
+GRANT SELECT ON ALL TABLES IN SCHEMA public_olist_staging TO engineer;
+GRANT SELECT ON ALL TABLES IN SCHEMA public_olist_marts   TO engineer;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA raw                  GRANT SELECT ON TABLES TO engineer;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public_olist_staging GRANT SELECT ON TABLES TO engineer;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public_olist_marts   GRANT SELECT ON TABLES TO engineer;
+
+GRANT SELECT ON public_olist_marts.mart_olist_customer_orders   TO analyst;
+GRANT SELECT ON public_olist_marts.mart_olist_seller_performance TO analyst;
+
+ALTER TABLE public_olist_marts.mart_olist_customer_orders ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+  CREATE POLICY engineer_full_access
+    ON public_olist_marts.mart_olist_customer_orders
+    FOR SELECT TO engineer
+    USING (true);
+EXCEPTION WHEN duplicate_object THEN RAISE NOTICE 'engineer_full_access already exists';
+END $$;
+
+DO $$ BEGIN
+  CREATE POLICY analyst_delivered_only
+    ON public_olist_marts.mart_olist_customer_orders
+    FOR SELECT TO analyst
+    USING (delivered_orders > 0);
+EXCEPTION WHEN duplicate_object THEN RAISE NOTICE 'analyst_delivered_only already exists';
 END $$;

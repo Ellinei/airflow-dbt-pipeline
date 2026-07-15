@@ -20,7 +20,11 @@ venv/
 
 # ── IDE / tooling ─────────────────────────────────────────────────────────────
 .claude/
+.mcp.json
 
 # ── OS junk ───────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
+
+# ── Local-only large datasets (never commit) ──────────────────────────────────
+data/olist/*.csv
