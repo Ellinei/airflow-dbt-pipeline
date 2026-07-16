@@ -1,10 +1,18 @@
 -- ══════════════════════════════════════════════════════════════════════════════
 --  Policy as Code — role creation, grants, and row-level security
---  Run once against the warehouse database:
---    docker-compose exec postgres_warehouse \
---      psql -U warehouse -d warehouse -f /docker-entrypoint-initdb.d/setup_roles.sql
---  Or from host:
---    psql -h localhost -p 5433 -U warehouse -d warehouse -f governance/setup_roles.sql
+--  Demo user passwords are passed in as psql variables (not hardcoded) — set
+--  GOVERNANCE_ENGINEER_PASSWORD / GOVERNANCE_ANALYST_PASSWORD in .env, then run
+--  from host:
+--    psql -h localhost -p 5433 -U warehouse -d warehouse \
+--      -v engineer_password="$GOVERNANCE_ENGINEER_PASSWORD" \
+--      -v analyst_password="$GOVERNANCE_ANALYST_PASSWORD" \
+--      -f governance/setup_roles.sql
+--  Or against the running container:
+--    docker-compose exec -T postgres_warehouse \
+--      psql -U warehouse -d warehouse \
+--      -v engineer_password="$GOVERNANCE_ENGINEER_PASSWORD" \
+--      -v analyst_password="$GOVERNANCE_ANALYST_PASSWORD" \
+--      < governance/setup_roles.sql
 -- ══════════════════════════════════════════════════════════════════════════════
 
 -- ── 1. Roles ──────────────────────────────────────────────────────────────────
@@ -23,16 +31,25 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN RAISE NOTICE 'role analyst already exists';
 END $$;
 
--- Demo login users (for manual psql verification)
+-- Demo login users (for manual psql verification). Created without a password
+-- here (psql's :'var' interpolation inside a dollar-quoted DO $$ ... $$ body is
+-- not reliably substituted), then password is set unconditionally below via a
+-- plain top-level ALTER USER, which is idempotent by nature (no error on rerun).
 DO $$ BEGIN
-  CREATE USER engineer_user WITH PASSWORD 'engineer' IN ROLE engineer;
+  CREATE USER engineer_user IN ROLE engineer;
 EXCEPTION WHEN duplicate_object THEN RAISE NOTICE 'engineer_user already exists';
 END $$;
 
 DO $$ BEGIN
-  CREATE USER analyst_user WITH PASSWORD 'analyst' IN ROLE analyst;
+  CREATE USER analyst_user IN ROLE analyst;
 EXCEPTION WHEN duplicate_object THEN RAISE NOTICE 'analyst_user already exists';
 END $$;
+
+-- Passwords come from the :engineer_password / :analyst_password psql
+-- variables (see header). Plain top-level statements, not inside a $$ ... $$
+-- body, so psql's :'var' interpolation applies unambiguously.
+ALTER USER engineer_user WITH PASSWORD :'engineer_password';
+ALTER USER analyst_user  WITH PASSWORD :'analyst_password';
 
 -- ── 2. Schema-level grants ────────────────────────────────────────────────────
 -- engineer: can see raw, staging, and marts

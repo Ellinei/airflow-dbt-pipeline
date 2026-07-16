@@ -146,6 +146,25 @@ The same `engineer`/`analyst` role split from the toy demo (`governance/setup_ro
 
 ---
 
+## Secrets & Configuration
+
+Copy `.env.example` to `.env` and fill in real values before starting the stack — `.env` is
+gitignored and never committed. `.env.example` documents every variable, including how to
+generate a fresh Airflow Fernet key.
+
+> Older commits in this repo's history contain local-dev-only demo credentials (Airflow Fernet
+> key, default admin password, OpenMetadata service passwords) that predate this file. They have
+> since been rotated; current credentials live only in your own `.env`.
+
+If you use the optional `catalog` profile (OpenMetadata), the ingestion CLI configs are
+generated from tracked templates rather than committed directly:
+```bash
+envsubst < openmetadata/postgres_ingestion.yaml.template > openmetadata/postgres_ingestion.yaml
+envsubst < openmetadata/dbt_ingestion.yaml.template > openmetadata/dbt_ingestion.yaml
+```
+
+---
+
 ## Quick Start
 
 ```bash
@@ -160,7 +179,7 @@ docker compose up -d
 docker compose logs -f airflow-init
 
 # 4. Open Airflow UI
-#    http://localhost:8080   login: admin / admin
+#    http://localhost:8080   login: admin / $AIRFLOW_ADMIN_PASSWORD (see .env)
 
 # 5. Trigger the DAG manually from the UI, or wait for the daily schedule
 ```
@@ -183,9 +202,9 @@ dbt docs generate --profiles-dir . && dbt docs serve --profiles-dir . --port 808
 ```
 Host:     localhost
 Port:     5433
-Database: warehouse
-User:     warehouse
-Password: warehouse
+Database: $WAREHOUSE_DB_NAME  (see .env — default "warehouse")
+User:     $WAREHOUSE_DB_USER  (see .env — default "warehouse")
+Password: $WAREHOUSE_DB_PASSWORD  (see .env)
 ```
 
 ---
@@ -195,6 +214,7 @@ Password: warehouse
 ```
 .
 ├── .env                          # Credentials (never commit to git)
+├── .env.example                  # Template listing every required variable
 ├── docker-compose.yml            # All services
 ├── Dockerfile                    # Custom Airflow image (dbt, Cosmos, pandas, mlflow...)
 ├── dags/

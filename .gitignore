@@ -21,6 +21,12 @@ venv/
 # ── IDE / tooling ─────────────────────────────────────────────────────────────
 .claude/
 .mcp.json
+.vscode/
+.idea/
+
+# ── Test artefacts ────────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
 
 # ── OS junk ───────────────────────────────────────────────────────────────────
 .DS_Store
@@ -28,3 +34,8 @@ Thumbs.db
 
 # ── Local-only large datasets (never commit) ──────────────────────────────────
 data/olist/*.csv
+
+# ── OpenMetadata ingestion configs generated from *.yaml.template (contain
+#    credentials interpolated from .env) — templates themselves stay tracked ──
+openmetadata/*.yaml
+!openmetadata/*.yaml.template
