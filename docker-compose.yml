@@ -1,9 +1,10 @@
 ---
 # ══════════════════════════════════════════════════════════════════════════════
 #  Airflow + dbt + PostgreSQL — local development stack
-#  Airflow UI  → http://localhost:8080  (admin / admin)
-#  Warehouse   → localhost:5433         (warehouse / warehouse / warehouse)
-#  OM Catalog  → http://localhost:8585  (admin / admin)  [--profile catalog]
+#  Airflow UI  → http://localhost:8080  (admin / see AIRFLOW_ADMIN_PASSWORD in .env)
+#  Warehouse   → localhost:5433         (see WAREHOUSE_DB_USER/PASSWORD in .env)
+#  OM Catalog  → http://localhost:8585  (admin / see .env)  [--profile catalog]
+#  Credentials are generated per .env.example — see README for setup.
 # ══════════════════════════════════════════════════════════════════════════════
 version: "3.8"
 
@@ -20,7 +21,7 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-    AIRFLOW__CORE__FERNET_KEY: "ZmDfcTF7_60GrrY167zsiPd67pEvs0aGOv2oasOM1Pg="
+    AIRFLOW__CORE__FERNET_KEY: "${AIRFLOW_FERNET_KEY}"
     # Metadata DB
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD}@postgres_airflow:5432/${AIRFLOW_DB_NAME}"
     # API auth
@@ -114,7 +115,7 @@ services:
           --lastname User \
           --role Admin \
           --email admin@example.com \
-          --password admin || true
+          --password "${AIRFLOW_ADMIN_PASSWORD}" || true
         echo "🎉 Init complete."
     restart: "no"
 
@@ -174,11 +175,11 @@ services:
     command: "--sort_buffer_size=10M"
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: om_root_password
+      MYSQL_ROOT_PASSWORD: "${OPENMETADATA_MYSQL_ROOT_PASSWORD}"
     expose:
       - 3306
     healthcheck:
-      test: mysql --user=root --password=om_root_password --silent --execute "use openmetadata_db"
+      test: mysql --user=root --password=${OPENMETADATA_MYSQL_ROOT_PASSWORD} --silent --execute "use openmetadata_db"
       interval: 15s
       timeout: 10s
       retries: 10
@@ -215,7 +216,7 @@ services:
       DB_SCHEME: mysql
       DB_PARAMS: "allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=UTC"
       DB_USER: openmetadata_user
-      DB_USER_PASSWORD: openmetadata_password
+      DB_USER_PASSWORD: "${OPENMETADATA_DB_PASSWORD}"
       DB_HOST: openmetadata-mysql
       DB_PORT: "3306"
       OM_DATABASE: openmetadata_db

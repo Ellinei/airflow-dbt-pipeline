@@ -21,7 +21,10 @@ from pathlib import Path
 from airflow.decorators import dag, task
 
 MANIFEST_PATH = Path("/opt/airflow/dbt_project/target/manifest.json")
-WAREHOUSE_DSN = "postgresql+psycopg2://warehouse:warehouse@postgres_warehouse:5432/warehouse"
+_db_user = os.getenv("WAREHOUSE_DB_USER", "warehouse")
+_db_password = os.getenv("WAREHOUSE_DB_PASSWORD", "warehouse")
+_db_name = os.getenv("WAREHOUSE_DB_NAME", "warehouse")
+WAREHOUSE_DSN = f"postgresql+psycopg2://{_db_user}:{_db_password}@postgres_warehouse:5432/{_db_name}"
 
 
 @dag(
@@ -56,6 +59,28 @@ def rag_index() -> None:
             ON catalog_embeddings
             USING ivfflat (embedding vector_cosine_ops)
             WITH (lists = 10);
+
+        -- Dedupe any rows a prior (pre-fix) run already duplicated, before the
+        -- unique index below can be created. Ties on updated_at (all rows from
+        -- one run share the same transaction timestamp) are broken by ctid.
+        DELETE FROM catalog_embeddings
+        WHERE ctid IN (
+            SELECT ctid FROM (
+                SELECT ctid,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY source, model_name, COALESCE(column_name, '')
+                           ORDER BY updated_at DESC, ctid DESC
+                       ) AS rn
+                FROM catalog_embeddings
+            ) ranked
+            WHERE rn > 1
+        );
+
+        -- COALESCE(column_name, '') because model-level rows have column_name
+        -- NULL, and a plain unique index treats every NULL as distinct — it
+        -- would never dedupe those rows without the COALESCE.
+        CREATE UNIQUE INDEX IF NOT EXISTS catalog_embeddings_unique_idx
+            ON catalog_embeddings (source, model_name, COALESCE(column_name, ''));
         """
         engine = sqlalchemy.create_engine(WAREHOUSE_DSN)
         with engine.connect() as conn:
@@ -115,7 +140,11 @@ def rag_index() -> None:
             VALUES
                 (:source, :model_name, :column_name, :description,
                  :embedding::vector, now())
-            ON CONFLICT DO NOTHING
+            ON CONFLICT (source, model_name, COALESCE(column_name, ''))
+            DO UPDATE SET
+                description = EXCLUDED.description,
+                embedding   = EXCLUDED.embedding,
+                updated_at  = EXCLUDED.updated_at
         """)
 
         stored = 0

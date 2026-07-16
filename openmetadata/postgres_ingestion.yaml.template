@@ -1,0 +1,23 @@
+source:
+  type: postgres
+  serviceName: warehouse_postgres
+  serviceConnection:
+    config:
+      type: Postgres
+      username: ${WAREHOUSE_DB_USER}
+      authType:
+        password: ${WAREHOUSE_DB_PASSWORD}
+      hostPort: postgres_warehouse:5432
+      database: ${WAREHOUSE_DB_NAME}
+  sourceConfig:
+    config:
+      type: DatabaseMetadata
+sink:
+  type: metadata-rest
+  config: {}
+workflowConfig:
+  openMetadataServerConfig:
+    hostPort: http://openmetadata-server:8585/api
+    authProvider: openmetadata
+    securityConfig:
+      jwtToken: "${OPENMETADATA_JWT_TOKEN}"

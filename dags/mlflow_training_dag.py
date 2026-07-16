@@ -36,8 +36,11 @@ def mlflow_training() -> None:
         from sklearn.model_selection import train_test_split
 
         # ── Read from the warehouse mart ──────────────────────────────────────
+        db_user = os.getenv("WAREHOUSE_DB_USER", "warehouse")
+        db_password = os.getenv("WAREHOUSE_DB_PASSWORD", "warehouse")
+        db_name = os.getenv("WAREHOUSE_DB_NAME", "warehouse")
         engine = sqlalchemy.create_engine(
-            "postgresql+psycopg2://warehouse:warehouse@postgres_warehouse:5432/warehouse"
+            f"postgresql+psycopg2://{db_user}:{db_password}@postgres_warehouse:5432/{db_name}"
         )
         df = pd.read_sql(
             "SELECT total_orders, avg_order_value, completed_orders, cancelled_orders, "

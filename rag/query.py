@@ -15,7 +15,12 @@ from __future__ import annotations
 import os
 import sys
 
-WAREHOUSE_DSN = "postgresql+psycopg2://warehouse:warehouse@localhost:5433/warehouse"
+_db_user = os.getenv("WAREHOUSE_DB_USER", "warehouse")
+_db_password = os.getenv("WAREHOUSE_DB_PASSWORD", "warehouse")
+_db_name = os.getenv("WAREHOUSE_DB_NAME", "warehouse")
+_db_host = os.getenv("WAREHOUSE_DB_HOST", "localhost")
+_db_port = os.getenv("WAREHOUSE_DB_PORT", "5433")
+WAREHOUSE_DSN = f"postgresql+psycopg2://{_db_user}:{_db_password}@{_db_host}:{_db_port}/{_db_name}"
 TOP_K = 5
 
 

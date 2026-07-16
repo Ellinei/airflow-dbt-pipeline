@@ -12,24 +12,38 @@
 #   dbt-postgres is installed --no-deps because its only two dependencies
 #   (dbt-core and psycopg2) are already satisfied above.
 #
-# Why pandas is installed --no-deps in its own step, and SQLAlchemy is NOT pinned?
-#   Both already ride in transitively via mlflow's own dependencies. Adding
-#   them as top-level pinned requirements in the SAME pip install as
-#   astronomer-cosmos/mlflow/scikit-learn/openai forces pip's resolver to
-#   jointly re-solve the entire dependency graph (including apache-airflow's,
-#   since cosmos depends on it), which triggers catastrophic backtracking
-#   ("pip is looking at multiple versions of flask-appbuilder... this could
-#   take a while" — observed to run 60+ minutes without finishing). Installing
-#   pandas --no-deps in its own step verifies/upgrades the already-satisfied
-#   version without re-resolving anything else.
-#   SQLAlchemy is deliberately left un-pinned: Airflow 2.9.1's own ORM models
-#   (e.g. TaskInstance) use SQLAlchemy 1.4-style declarative annotations that
-#   are NOT compatible with SQLAlchemy 2.0's Mapped[] typing requirements —
-#   forcing an upgrade to 2.0 crashloops the webserver/scheduler with
-#   `sqlalchemy.orm.exc.MappedAnnotationError` (confirmed empirically). The
-#   transitively-installed 1.4.x is what Airflow itself requires, and it's
-#   sufficient for the ingest_olist task (engine.begin()/text()/df.to_sql()
-#   are all supported since SQLAlchemy 1.4).
+# Why --constraint against Airflow's own constraints file, and requirements.txt?
+#   Every extra package below is exact-pinned in requirements.txt (see that
+#   file for regeneration instructions) instead of the version ranges this
+#   image used to carry. Installing pandas/astronomer-cosmos/mlflow/
+#   scikit-learn/openai together in ONE pip install used to trigger
+#   catastrophic resolver backtracking when their versions were open-ended
+#   ranges ("pip is looking at multiple versions of flask-appbuilder... this
+#   could take a while" — observed to run 60+ minutes without finishing).
+#   With every version exact-pinned there's no range for pip to search, so a
+#   single joint resolve is fast and safe — verified empirically (~2 min,
+#   no backtracking) with the --constraint flag below.
+#   The --constraint URL pins apache-airflow's OWN dependency tree (including
+#   SQLAlchemy==1.4.52 — see below) without adding new requirements to
+#   resolve, which is what keeps this fast rather than reintroducing
+#   backtracking.
+#
+# Why pandas and dbt-postgres are still installed --no-deps in their own steps?
+#   Their dependencies are already satisfied by the packages above (pandas
+#   transitively via mlflow; dbt-postgres needs only dbt-core + psycopg2).
+#   Folding them into the same joint resolve as the ranged packages used to
+#   was part of what caused the old backtracking; keeping them isolated
+#   avoids pulling their own (unpinned) dependency trees into any resolve.
+#
+# Why SQLAlchemy is not installed directly?
+#   Airflow 2.9.1's own ORM models (e.g. TaskInstance) use SQLAlchemy 1.4-style
+#   declarative annotations that are NOT compatible with SQLAlchemy 2.0's
+#   Mapped[] typing requirements — forcing an upgrade to 2.0 crashloops the
+#   webserver/scheduler with `sqlalchemy.orm.exc.MappedAnnotationError`
+#   (confirmed empirically). The --constraint file pins it to 1.4.52
+#   transitively, which is what Airflow itself requires and is sufficient for
+#   the ingest_olist task (engine.begin()/text()/df.to_sql() are all
+#   supported since SQLAlchemy 1.4).
 #
 # Why gcc?
 #   logbook (a dbt-core dependency) lacks a pre-built wheel for Python 3.12,
@@ -47,16 +61,18 @@ RUN apt-get update \
 
 # ── Install Python packages as the airflow user ───────────────────────────────
 USER airflow
-RUN pip install --no-cache-dir \
-        "psycopg2-binary>=2.9.6" \
-        "dbt-core==1.8.0" \
-        "astronomer-cosmos==1.4.3" \
-        "mlflow>=2.13.0,<3.0.0" \
-        "scikit-learn>=1.4.0,<2.0.0" \
-        "openai>=1.30.0,<2.0.0" \
+
+# Airflow's own constraints file for this exact release/Python combo — pins
+# apache-airflow's dependency tree (incl. SQLAlchemy) without adding new
+# requirements to resolve. See the block comment above for why this matters.
+ARG AIRFLOW_CONSTRAINTS_URL="https://raw.githubusercontent.com/apache/airflow/constraints-2.9.1/constraints-3.12.txt"
+
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir --constraint "${AIRFLOW_CONSTRAINTS_URL}" \
+        -r /tmp/requirements.txt \
     && pip install --no-cache-dir --no-deps "dbt-postgres==1.8.0"
 
 # Kept as its own layer (not chained with `&&` above) so this line is the
 # only one that invalidates on changes to the pandas pin — the heavy install
 # above stays cache-identical to prior builds.
-RUN pip install --no-cache-dir --no-deps "pandas>=2.0.0,<3.0.0"
+RUN pip install --no-cache-dir --no-deps "pandas==2.1.4"

@@ -1,0 +1,28 @@
+# Exact-pinned versions for the packages this project adds on top of the
+# apache/airflow:2.9.1 base image. Installed via the Dockerfile with:
+#   pip install --no-cache-dir \
+#     --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.9.1/constraints-3.12.txt" \
+#     -r requirements.txt
+#
+# The constraints file pins apache-airflow's own dependency tree (including
+# SQLAlchemy==1.4.52, required by Airflow 2.9.1's ORM — see Dockerfile) and
+# is what makes this resolve deterministically instead of triggering pip's
+# resolver backtracking. Verified via a clean install spike (~2 min, no
+# backtracking) on 2026-07-17.
+#
+# dbt-postgres and pandas are NOT listed here — they're installed separately
+# in the Dockerfile with --no-deps (their dependencies are already satisfied
+# by the packages above; a joint resolve of all of them together is what
+# caused the original backtracking this file replaces). Their exact pinned
+# versions (dbt-postgres==1.8.0, pandas==2.1.4) live inline in the Dockerfile.
+#
+# To regenerate after a version bump: rerun the same pip install (with the
+# same constraints URL) in a throwaway container, confirm it resolves cleanly
+# and the stack comes up healthy, then update the versions below (and the
+# inline dbt-postgres/pandas pins in the Dockerfile) to match.
+psycopg2-binary==2.9.9
+dbt-core==1.8.0
+astronomer-cosmos==1.4.3
+mlflow==2.22.5
+scikit-learn==1.9.0
+openai==1.25.0
