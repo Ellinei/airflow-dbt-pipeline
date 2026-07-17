@@ -21,9 +21,25 @@ def test_ingest_preserves_zip_code_leading_zeros(warehouse_engine):
 
 
 def test_ingest_is_idempotent_on_rerun(warehouse_engine):
-    first = _ingest_olist_files(warehouse_engine, FIXTURE_DIR, OLIST_FILES)
-    second = _ingest_olist_files(warehouse_engine, FIXTURE_DIR, OLIST_FILES)
-    assert first == second
+    _ingest_olist_files(warehouse_engine, FIXTURE_DIR, OLIST_FILES)
+    with warehouse_engine.connect() as conn:
+        first_counts = {
+            table: conn.execute(
+                sqlalchemy.text(f'SELECT COUNT(*) FROM raw."{table}"')
+            ).scalar()
+            for table in OLIST_FILES.values()
+        }
+
+    _ingest_olist_files(warehouse_engine, FIXTURE_DIR, OLIST_FILES)
+    with warehouse_engine.connect() as conn:
+        second_counts = {
+            table: conn.execute(
+                sqlalchemy.text(f'SELECT COUNT(*) FROM raw."{table}"')
+            ).scalar()
+            for table in OLIST_FILES.values()
+        }
+
+    assert first_counts == second_counts
 
 
 def test_ingest_raises_on_missing_files(tmp_path, warehouse_engine):
