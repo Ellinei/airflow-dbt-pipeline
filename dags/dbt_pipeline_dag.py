@@ -29,7 +29,6 @@ from datetime import datetime
 from pathlib import Path
 
 import requests
-
 from airflow.decorators import dag, task
 from airflow.operators.bash import BashOperator
 from cosmos import DbtTaskGroup, ExecutionConfig, ProfileConfig, ProjectConfig, RenderConfig

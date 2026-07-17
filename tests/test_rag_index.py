@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import sqlalchemy
 
-from dags.rag_index_dag import _ensure_catalog_embeddings_schema, _extract_descriptions_from_manifest
+from dags.rag_index_dag import (
+    _ensure_catalog_embeddings_schema,
+    _extract_descriptions_from_manifest,
+)
 
 
 def test_extract_descriptions_model_and_column_level():

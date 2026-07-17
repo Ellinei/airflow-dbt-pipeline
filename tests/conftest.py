@@ -21,7 +21,8 @@ def dbt_deps():
     dbt_exe = shutil.which("dbt")
     assert dbt_exe, "dbt not found on PATH — install project requirements first"
     subprocess.run(
-        [dbt_exe, "deps", "--project-dir", str(DBT_PROJECT_DIR), "--profiles-dir", str(DBT_PROJECT_DIR)],
+        [dbt_exe, "deps", "--project-dir", str(DBT_PROJECT_DIR),
+         "--profiles-dir", str(DBT_PROJECT_DIR)],
         check=True,
     )
 
