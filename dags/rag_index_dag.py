@@ -20,6 +20,8 @@ from pathlib import Path
 
 from airflow.decorators import dag, task
 
+from dags._operational_defaults import operational_default_args
+
 MANIFEST_PATH = Path("/opt/airflow/dbt_project/target/manifest.json")
 _db_user = os.getenv("WAREHOUSE_DB_USER", "warehouse")
 _db_password = os.getenv("WAREHOUSE_DB_PASSWORD", "warehouse")
@@ -112,7 +114,9 @@ def _ensure_catalog_embeddings_schema(engine) -> None:
     start_date=datetime(2024, 1, 1),
     schedule=None,         # trigger manually after dbt_pipeline runs
     catchup=False,
+    max_active_runs=1,
     tags=["rag", "pgvector", "catalog"],
+    default_args=operational_default_args(),
 )
 def rag_index() -> None:
 
