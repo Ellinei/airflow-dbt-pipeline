@@ -31,12 +31,13 @@ def dbt_deps():
 def warehouse_engine():
     """SQLAlchemy engine for the test warehouse Postgres (CI service
     container, or the local postgres_warehouse — same WAREHOUSE_DB_* env vars
-    the DAGs themselves use). Also ensures the `engineer` role exists: dbt's
-    grant_select post-hook (dbt_project/macros/grant_select.sql) runs on
-    every model build and fails if the role is missing, and a fresh database
-    has no roles until governance/setup_roles.sql is run — which this test
-    suite intentionally doesn't do (that's a production/manual concern, not
-    a CI one)."""
+    the DAGs themselves use). Also ensures the `engineer` and `analyst` roles
+    exist: dbt's grant_select post-hook (dbt_project/macros/grant_select.sql)
+    runs on every model build and fails if the role it grants to is missing
+    (mart_customer_orders_masked grants to `analyst`, other marts to
+    `engineer`), and a fresh database has no roles until
+    governance/setup_roles.sql is run — which this test suite intentionally
+    doesn't do (that's a production/manual concern, not a CI one)."""
     db_user = os.getenv("WAREHOUSE_DB_USER", "warehouse")
     db_password = os.getenv("WAREHOUSE_DB_PASSWORD", "warehouse")
     db_name = os.getenv("WAREHOUSE_DB_NAME", "warehouse")
@@ -46,9 +47,10 @@ def warehouse_engine():
         f"postgresql+psycopg2://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
     )
     with engine.begin() as conn:
-        conn.execute(sqlalchemy.text(
-            "DO $$ BEGIN CREATE ROLE engineer NOLOGIN; "
-            "EXCEPTION WHEN duplicate_object THEN NULL; END $$;"
-        ))
+        for role in ("engineer", "analyst"):
+            conn.execute(sqlalchemy.text(
+                f"DO $$ BEGIN CREATE ROLE {role} NOLOGIN; "
+                "EXCEPTION WHEN duplicate_object THEN NULL; END $$;"
+            ))
     yield engine
     engine.dispose()
