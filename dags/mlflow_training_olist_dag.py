@@ -19,6 +19,8 @@ from datetime import datetime
 
 from airflow.decorators import dag, task
 
+from dags._operational_defaults import operational_default_args
+
 
 @dag(
     dag_id="mlflow_training_olist",
@@ -26,7 +28,9 @@ from airflow.decorators import dag, task
     start_date=datetime(2024, 1, 1),
     schedule="@weekly",
     catchup=False,
+    max_active_runs=1,
     tags=["mlops", "mlflow", "training", "olist"],
+    default_args=operational_default_args(),
 )
 def mlflow_training_olist() -> None:
 

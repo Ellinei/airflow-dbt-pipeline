@@ -28,11 +28,12 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-import requests
 from airflow.decorators import dag, task
 from airflow.operators.bash import BashOperator
 from cosmos import DbtTaskGroup, ExecutionConfig, ProfileConfig, ProjectConfig, RenderConfig
 from cosmos.constants import LoadMode
+
+from dags._operational_defaults import operational_default_args
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 # Computed relative to this file rather than hardcoded to the Docker container
@@ -141,30 +142,16 @@ PROJECT_CONFIG = ProjectConfig(
 )
 
 
-def slack_alert(context: dict) -> None:
-    """Post a failure notification to Slack if a webhook URL is configured."""
-    webhook_url = os.getenv("SLACK_WEBHOOK_URL", "")
-    if not webhook_url:
-        return
-    ti = context["task_instance"]
-    requests.post(webhook_url, json={
-        "text": (
-            f":red_circle: *Pipeline failure*\n"
-            f"*DAG:* {ti.dag_id}  *Task:* {ti.task_id}\n"
-            f"*Log:* {ti.log_url}"
-        )
-    })
-
-
 @dag(
     dag_id="dbt_pipeline",
     description="Seeds raw data then runs and tests all dbt models via Cosmos.",
     start_date=datetime(2024, 1, 1),
     schedule="@daily",
     catchup=False,
+    max_active_runs=1,
     tags=["dbt", "cosmos", "warehouse", "portfolio"],
     doc_md=__doc__,
-    default_args={"on_failure_callback": slack_alert},
+    default_args=operational_default_args(),
 )
 def dbt_pipeline() -> None:
 
