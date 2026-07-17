@@ -622,14 +622,17 @@ git commit -m "Extract _ingest_olist_files, add Olist CI sample fixture and unit
 ### Task 4: Extract `_extract_descriptions_from_manifest` + rag_index tests
 
 **Files:**
-- Modify: `dags/rag_index_dag.py` (the `extract_descriptions` task, lines ~90-120)
+- Modify: `dags/rag_index_dag.py` (the `extract_descriptions` task, lines ~90-120, and the `ensure_schema` task, lines ~40-88)
 - Create: `tests/test_rag_index.py`
 
 **Interfaces:**
 - Consumes: `warehouse_engine` fixture (Task 2).
 - Produces: `_extract_descriptions_from_manifest(manifest: dict) -> list[dict]` in `dags/rag_index_dag.py`.
+- Produces: `_ensure_catalog_embeddings_schema(engine) -> None` in `dags/rag_index_dag.py` — a second, smaller extraction (see Step 1b) so the idempotency test reuses the exact production DDL instead of duplicating it.
 
 **Why this task exists (correction from the design spec):** the spec assumed Airflow's TaskFlow decorator exposes the original callable so no refactor was needed for `extract_descriptions`. That's wrong — `extract_descriptions` is a local variable inside the `rag_index()` closure, never bound to any module-level or DAG-reachable name, so it's not actually importable as written. It also reads from the hardcoded module-level `MANIFEST_PATH` constant rather than taking a parameter, so even if it were reachable, you couldn't point it at a test fixture. Same extraction pattern as Task 3 fixes both problems.
+
+**Pre-flight correction:** the first draft of this task had the idempotency test re-declare `catalog_embeddings`'s DDL inline (duplicating `ensure_schema`'s DDL verbatim, a defect pattern — see the plan's review rubric). Fixed by also extracting `ensure_schema`'s DDL into `_ensure_catalog_embeddings_schema(engine)` (Step 1b below), which both the task and the test call — no duplication, and the test now exercises the literal production DDL rather than a hand-copied approximation of it.
 
 - [ ] **Step 1: Extract `_extract_descriptions_from_manifest` in `dags/rag_index_dag.py`**
 
@@ -715,6 +718,125 @@ Inside `rag_index()` (replacing the old task body):
         return _extract_descriptions_from_manifest(manifest)
 ```
 
+- [ ] **Step 1b: Extract `_ensure_catalog_embeddings_schema` in `dags/rag_index_dag.py`**
+
+Current code (the `ensure_schema` task, full body):
+```python
+    @task
+    def ensure_schema() -> None:
+        """Create extension + table if not already present (idempotent)."""
+        import sqlalchemy
+
+        ddl = """
+        CREATE EXTENSION IF NOT EXISTS vector;
+
+        CREATE TABLE IF NOT EXISTS catalog_embeddings (
+            id          SERIAL PRIMARY KEY,
+            source      TEXT NOT NULL,
+            model_name  TEXT NOT NULL,
+            column_name TEXT,
+            description TEXT NOT NULL,
+            embedding   vector(1536),
+            updated_at  TIMESTAMPTZ DEFAULT now()
+        );
+
+        CREATE INDEX IF NOT EXISTS catalog_embeddings_vec_idx
+            ON catalog_embeddings
+            USING ivfflat (embedding vector_cosine_ops)
+            WITH (lists = 10);
+
+        -- Dedupe any rows a prior (pre-fix) run already duplicated, before the
+        -- unique index below can be created. Ties on updated_at (all rows from
+        -- one run share the same transaction timestamp) are broken by ctid.
+        DELETE FROM catalog_embeddings
+        WHERE ctid IN (
+            SELECT ctid FROM (
+                SELECT ctid,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY source, model_name, COALESCE(column_name, '')
+                           ORDER BY updated_at DESC, ctid DESC
+                       ) AS rn
+                FROM catalog_embeddings
+            ) ranked
+            WHERE rn > 1
+        );
+
+        -- COALESCE(column_name, '') because model-level rows have column_name
+        -- NULL, and a plain unique index treats every NULL as distinct — it
+        -- would never dedupe those rows without the COALESCE.
+        CREATE UNIQUE INDEX IF NOT EXISTS catalog_embeddings_unique_idx
+            ON catalog_embeddings (source, model_name, COALESCE(column_name, ''));
+        """
+        engine = sqlalchemy.create_engine(WAREHOUSE_DSN)
+        with engine.connect() as conn:
+            conn.execute(sqlalchemy.text(ddl))
+            conn.commit()
+```
+
+Replace with (module level, placed right after `_extract_descriptions_from_manifest` from Step 1):
+```python
+def _ensure_catalog_embeddings_schema(engine) -> None:
+    """Create extension + table + indexes if not already present (idempotent).
+    Pulled out of the ensure_schema task body so tests can call the exact
+    production DDL instead of duplicating it."""
+    import sqlalchemy
+
+    ddl = """
+    CREATE EXTENSION IF NOT EXISTS vector;
+
+    CREATE TABLE IF NOT EXISTS catalog_embeddings (
+        id          SERIAL PRIMARY KEY,
+        source      TEXT NOT NULL,
+        model_name  TEXT NOT NULL,
+        column_name TEXT,
+        description TEXT NOT NULL,
+        embedding   vector(1536),
+        updated_at  TIMESTAMPTZ DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS catalog_embeddings_vec_idx
+        ON catalog_embeddings
+        USING ivfflat (embedding vector_cosine_ops)
+        WITH (lists = 10);
+
+    -- Dedupe any rows a prior (pre-fix) run already duplicated, before the
+    -- unique index below can be created. Ties on updated_at (all rows from
+    -- one run share the same transaction timestamp) are broken by ctid.
+    DELETE FROM catalog_embeddings
+    WHERE ctid IN (
+        SELECT ctid FROM (
+            SELECT ctid,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY source, model_name, COALESCE(column_name, '')
+                       ORDER BY updated_at DESC, ctid DESC
+                   ) AS rn
+            FROM catalog_embeddings
+        ) ranked
+        WHERE rn > 1
+    );
+
+    -- COALESCE(column_name, '') because model-level rows have column_name
+    -- NULL, and a plain unique index treats every NULL as distinct — it
+    -- would never dedupe those rows without the COALESCE.
+    CREATE UNIQUE INDEX IF NOT EXISTS catalog_embeddings_unique_idx
+        ON catalog_embeddings (source, model_name, COALESCE(column_name, ''));
+    """
+    with engine.connect() as conn:
+        conn.execute(sqlalchemy.text(ddl))
+        conn.commit()
+```
+
+And inside `rag_index()` (replacing the old task body):
+```python
+    @task
+    def ensure_schema() -> None:
+        """Thin Airflow wrapper — see _ensure_catalog_embeddings_schema."""
+        import sqlalchemy
+
+        engine = sqlalchemy.create_engine(WAREHOUSE_DSN)
+        _ensure_catalog_embeddings_schema(engine)
+```
+
 - [ ] **Step 2: Create `tests/test_rag_index.py`**
 
 ```python
@@ -722,7 +844,7 @@ from __future__ import annotations
 
 import sqlalchemy
 
-from dags.rag_index_dag import _extract_descriptions_from_manifest
+from dags.rag_index_dag import _ensure_catalog_embeddings_schema, _extract_descriptions_from_manifest
 
 
 def test_extract_descriptions_model_and_column_level():
@@ -772,23 +894,9 @@ def test_catalog_embeddings_upsert_is_idempotent(warehouse_engine):
             embedding   = EXCLUDED.embedding,
             updated_at  = EXCLUDED.updated_at
     """)
+    _ensure_catalog_embeddings_schema(warehouse_engine)
+
     with warehouse_engine.begin() as conn:
-        conn.execute(sqlalchemy.text("CREATE EXTENSION IF NOT EXISTS vector"))
-        conn.execute(sqlalchemy.text("""
-            CREATE TABLE IF NOT EXISTS catalog_embeddings (
-                id SERIAL PRIMARY KEY,
-                source TEXT NOT NULL,
-                model_name TEXT NOT NULL,
-                column_name TEXT,
-                description TEXT NOT NULL,
-                embedding vector(1536),
-                updated_at TIMESTAMPTZ DEFAULT now()
-            )
-        """))
-        conn.execute(sqlalchemy.text(
-            "CREATE UNIQUE INDEX IF NOT EXISTS catalog_embeddings_unique_idx "
-            "ON catalog_embeddings (source, model_name, COALESCE(column_name, ''))"
-        ))
         conn.execute(sqlalchemy.text(
             "DELETE FROM catalog_embeddings WHERE model_name = 'test_model'"
         ))
@@ -1103,5 +1211,7 @@ Then check the Actions tab on `github.com/Ellinei/airflow-dbt-pipeline` (or `gh 
 **Spec coverage:** All 5 spec sections have a task — refactor (Tasks 3, 4), pytest suite (Tasks 2, 3, 4, 6), dbt custom tests (Task 5), Olist CI sample data (Task 3), CI workflow (Task 7). Tooling (Task 1) wasn't a separate spec section but is a prerequisite the spec implied ("ruff", "pyproject.toml").
 
 **Corrections made from the spec during planning** (documented inline in the relevant tasks, not hidden): `rag_index_dag.py`'s `extract_descriptions` does need a refactor after all (Task 4) — the spec's assumption that TaskFlow exposes it directly was wrong. Two additional portability fixes not in the original spec were discovered by reading the actual DAG code: `DBT_PROJECT_PATH`/`DBT_EXECUTABLE` hardcoded container paths (Task 2), and `profiles.yml`'s hardcoded `host: postgres_warehouse` (Task 2) — both would have made the DAG-import test and dbt-build test fail in CI immediately. Both were verified empirically (fresh-install spike, DagBag-import spike) before being written into this plan.
+
+**Pre-flight review correction (before Task 1 dispatch):** Task 4's original draft had the upsert-idempotency test re-declare `catalog_embeddings`'s DDL inline, duplicating `ensure_schema`'s DDL verbatim — a defect pattern the review rubric explicitly flags. Fixed by extracting a second helper, `_ensure_catalog_embeddings_schema(engine)`, reused by both the task and the test (Task 4, Step 1b).
 
 **Type/interface consistency:** `_ingest_olist_files(engine, data_dir: Path, files_map: dict[str, str]) -> dict[str, int]` — same signature used in Tasks 3 and 6. `_extract_descriptions_from_manifest(manifest: dict) -> list[dict]` — same signature used in Task 4 (defined and tested in the same task). `warehouse_engine` fixture — same name/behavior referenced by Tasks 3, 4, 6, defined once in Task 2.
