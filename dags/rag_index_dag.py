@@ -108,6 +108,28 @@ def _ensure_catalog_embeddings_schema(engine) -> None:
         conn.execute(sqlalchemy.text(ddl))
 
 
+def _create_embeddings_with_retry(
+    client, model: str, texts: list[str], max_attempts: int = 3
+):
+    """Calls client.embeddings.create with manual retry+backoff (2s/4s/8s)
+    on transient OpenAI API errors — a fast first line of defense before
+    Airflow's own 5-minute task-level retry (dags/_operational_defaults.py).
+    Re-raises after the final attempt so Airflow's retry still applies if
+    this also fails."""
+    import time
+
+    from openai import APIError
+
+    delays = [2, 4, 8]
+    for attempt in range(max_attempts):
+        try:
+            return client.embeddings.create(model=model, input=texts)
+        except APIError:
+            if attempt == max_attempts - 1:
+                raise
+            time.sleep(delays[attempt])
+
+
 @dag(
     dag_id="rag_index",
     description="Embed dbt catalog descriptions into pgvector for semantic search.",
@@ -170,10 +192,7 @@ def rag_index() -> None:
         stored = 0
         texts = [d["description"] for d in docs]
 
-        response = client.embeddings.create(
-            model="text-embedding-3-small",
-            input=texts,
-        )
+        response = _create_embeddings_with_retry(client, "text-embedding-3-small", texts)
 
         with engine.connect() as conn:
             for doc, emb_obj in zip(docs, response.data):

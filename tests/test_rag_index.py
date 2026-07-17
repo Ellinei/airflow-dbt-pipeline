@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import time
+
+import httpx
+import pytest
 import sqlalchemy
+from openai import APIConnectionError
 
 from dags.rag_index_dag import (
+    _create_embeddings_with_retry,
     _ensure_catalog_embeddings_schema,
     _extract_descriptions_from_manifest,
 )
@@ -38,6 +44,55 @@ def test_extract_descriptions_model_and_column_level():
 
 def test_extract_descriptions_empty_manifest_returns_empty_list():
     assert _extract_descriptions_from_manifest({"nodes": {}}) == []
+
+
+def test_create_embeddings_with_retry_succeeds_first_try():
+    class _FakeEmbeddings:
+        def create(self, model, input):
+            return {"model": model, "input": input}
+
+    class _FakeClient:
+        embeddings = _FakeEmbeddings()
+
+    result = _create_embeddings_with_retry(_FakeClient(), "text-embedding-3-small", ["a", "b"])
+
+    assert result == {"model": "text-embedding-3-small", "input": ["a", "b"]}
+
+
+def test_create_embeddings_with_retry_recovers_after_transient_errors(monkeypatch):
+    monkeypatch.setattr(time, "sleep", lambda seconds: None)
+    request = httpx.Request("POST", "https://api.openai.com/v1/embeddings")
+    attempts = {"count": 0}
+
+    class _FakeEmbeddings:
+        def create(self, model, input):
+            attempts["count"] += 1
+            if attempts["count"] < 3:
+                raise APIConnectionError(request=request)
+            return "success"
+
+    class _FakeClient:
+        embeddings = _FakeEmbeddings()
+
+    result = _create_embeddings_with_retry(_FakeClient(), "text-embedding-3-small", ["a"])
+
+    assert result == "success"
+    assert attempts["count"] == 3
+
+
+def test_create_embeddings_with_retry_gives_up_after_max_attempts(monkeypatch):
+    monkeypatch.setattr(time, "sleep", lambda seconds: None)
+    request = httpx.Request("POST", "https://api.openai.com/v1/embeddings")
+
+    class _FakeEmbeddings:
+        def create(self, model, input):
+            raise APIConnectionError(request=request)
+
+    class _FakeClient:
+        embeddings = _FakeEmbeddings()
+
+    with pytest.raises(APIConnectionError):
+        _create_embeddings_with_retry(_FakeClient(), "text-embedding-3-small", ["a"])
 
 
 def test_catalog_embeddings_upsert_is_idempotent(warehouse_engine):
