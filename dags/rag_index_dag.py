@@ -27,6 +27,85 @@ _db_name = os.getenv("WAREHOUSE_DB_NAME", "warehouse")
 WAREHOUSE_DSN = f"postgresql+psycopg2://{_db_user}:{_db_password}@postgres_warehouse:5432/{_db_name}"
 
 
+def _extract_descriptions_from_manifest(manifest: dict) -> list[dict]:
+    """Pull model + column descriptions from a parsed dbt manifest dict.
+    Pulled out of the extract_descriptions task body so it's directly
+    unit-testable with a fixture manifest — no file I/O, no MANIFEST_PATH
+    dependency."""
+    docs: list[dict] = []
+
+    for node_id, node in manifest.get("nodes", {}).items():
+        if node.get("resource_type") != "model":
+            continue
+        model_name = node["name"]
+        model_desc = node.get("description", "").strip()
+        if model_desc:
+            docs.append(
+                {"source": "model", "model_name": model_name,
+                 "column_name": None, "description": model_desc}
+            )
+        for col_name, col_meta in node.get("columns", {}).items():
+            col_desc = col_meta.get("description", "").strip()
+            if col_desc:
+                docs.append(
+                    {"source": "column", "model_name": model_name,
+                     "column_name": col_name,
+                     "description": f"{model_name}.{col_name}: {col_desc}"}
+                )
+
+    return docs
+
+
+def _ensure_catalog_embeddings_schema(engine) -> None:
+    """Create extension + table + indexes if not already present (idempotent).
+    Pulled out of the ensure_schema task body so tests can call the exact
+    production DDL instead of duplicating it."""
+    import sqlalchemy
+
+    ddl = """
+    CREATE EXTENSION IF NOT EXISTS vector;
+
+    CREATE TABLE IF NOT EXISTS catalog_embeddings (
+        id          SERIAL PRIMARY KEY,
+        source      TEXT NOT NULL,
+        model_name  TEXT NOT NULL,
+        column_name TEXT,
+        description TEXT NOT NULL,
+        embedding   vector(1536),
+        updated_at  TIMESTAMPTZ DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS catalog_embeddings_vec_idx
+        ON catalog_embeddings
+        USING ivfflat (embedding vector_cosine_ops)
+        WITH (lists = 10);
+
+    -- Dedupe any rows a prior (pre-fix) run already duplicated, before the
+    -- unique index below can be created. Ties on updated_at (all rows from
+    -- one run share the same transaction timestamp) are broken by ctid.
+    DELETE FROM catalog_embeddings
+    WHERE ctid IN (
+        SELECT ctid FROM (
+            SELECT ctid,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY source, model_name, COALESCE(column_name, '')
+                       ORDER BY updated_at DESC, ctid DESC
+                   ) AS rn
+            FROM catalog_embeddings
+        ) ranked
+        WHERE rn > 1
+    );
+
+    -- COALESCE(column_name, '') because model-level rows have column_name
+    -- NULL, and a plain unique index treats every NULL as distinct — it
+    -- would never dedupe those rows without the COALESCE.
+    CREATE UNIQUE INDEX IF NOT EXISTS catalog_embeddings_unique_idx
+        ON catalog_embeddings (source, model_name, COALESCE(column_name, ''));
+    """
+    with engine.begin() as conn:
+        conn.execute(sqlalchemy.text(ddl))
+
+
 @dag(
     dag_id="rag_index",
     description="Embed dbt catalog descriptions into pgvector for semantic search.",
@@ -39,85 +118,22 @@ def rag_index() -> None:
 
     @task
     def ensure_schema() -> None:
-        """Create extension + table if not already present (idempotent)."""
+        """Thin Airflow wrapper — see _ensure_catalog_embeddings_schema."""
         import sqlalchemy
 
-        ddl = """
-        CREATE EXTENSION IF NOT EXISTS vector;
-
-        CREATE TABLE IF NOT EXISTS catalog_embeddings (
-            id          SERIAL PRIMARY KEY,
-            source      TEXT NOT NULL,
-            model_name  TEXT NOT NULL,
-            column_name TEXT,
-            description TEXT NOT NULL,
-            embedding   vector(1536),
-            updated_at  TIMESTAMPTZ DEFAULT now()
-        );
-
-        CREATE INDEX IF NOT EXISTS catalog_embeddings_vec_idx
-            ON catalog_embeddings
-            USING ivfflat (embedding vector_cosine_ops)
-            WITH (lists = 10);
-
-        -- Dedupe any rows a prior (pre-fix) run already duplicated, before the
-        -- unique index below can be created. Ties on updated_at (all rows from
-        -- one run share the same transaction timestamp) are broken by ctid.
-        DELETE FROM catalog_embeddings
-        WHERE ctid IN (
-            SELECT ctid FROM (
-                SELECT ctid,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY source, model_name, COALESCE(column_name, '')
-                           ORDER BY updated_at DESC, ctid DESC
-                       ) AS rn
-                FROM catalog_embeddings
-            ) ranked
-            WHERE rn > 1
-        );
-
-        -- COALESCE(column_name, '') because model-level rows have column_name
-        -- NULL, and a plain unique index treats every NULL as distinct — it
-        -- would never dedupe those rows without the COALESCE.
-        CREATE UNIQUE INDEX IF NOT EXISTS catalog_embeddings_unique_idx
-            ON catalog_embeddings (source, model_name, COALESCE(column_name, ''));
-        """
         engine = sqlalchemy.create_engine(WAREHOUSE_DSN)
-        with engine.connect() as conn:
-            conn.execute(sqlalchemy.text(ddl))
-            conn.commit()
+        _ensure_catalog_embeddings_schema(engine)
 
     @task
     def extract_descriptions() -> list[dict]:
-        """Pull model + column descriptions from the dbt manifest."""
+        """Thin Airflow wrapper — see _extract_descriptions_from_manifest for
+        the actual parsing logic (module-level, independently unit-tested)."""
         if not MANIFEST_PATH.exists():
             raise FileNotFoundError(
                 f"{MANIFEST_PATH} not found — run the dbt_pipeline DAG first."
             )
-
         manifest = json.loads(MANIFEST_PATH.read_text())
-        docs: list[dict] = []
-
-        for node_id, node in manifest.get("nodes", {}).items():
-            if node.get("resource_type") != "model":
-                continue
-            model_name = node["name"]
-            model_desc = node.get("description", "").strip()
-            if model_desc:
-                docs.append(
-                    {"source": "model", "model_name": model_name,
-                     "column_name": None, "description": model_desc}
-                )
-            for col_name, col_meta in node.get("columns", {}).items():
-                col_desc = col_meta.get("description", "").strip()
-                if col_desc:
-                    docs.append(
-                        {"source": "column", "model_name": model_name,
-                         "column_name": col_name,
-                         "description": f"{model_name}.{col_name}: {col_desc}"}
-                    )
-
-        return docs
+        return _extract_descriptions_from_manifest(manifest)
 
     @task
     def embed_and_store(docs: list[dict]) -> int:

@@ -64,6 +64,9 @@ models:
     columns:
       - name: customer_id
         description: "Primary key — unique per customer."
+        tests:
+          - not_null
+          - unique
       - name: email
         description: "Masked email — first character + **** + @domain."
       - name: lifetime_value
