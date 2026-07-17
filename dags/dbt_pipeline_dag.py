@@ -61,6 +61,67 @@ OLIST_FILES = {
     "product_category_name_translation.csv": "olist_product_category_translation",
 }
 
+# Zip-code-prefix columns must stay strings or pandas drops leading zeros on
+# Brazilian CEP codes (e.g. "01046" -> 1046).
+ZIP_DTYPE_OVERRIDES = {
+    "olist_customers_dataset.csv": {"customer_zip_code_prefix": str},
+    "olist_sellers_dataset.csv": {"seller_zip_code_prefix": str},
+    "olist_geolocation_dataset.csv": {"geolocation_zip_code_prefix": str},
+}
+
+
+def _ingest_olist_files(engine, data_dir: Path, files_map: dict[str, str]) -> dict[str, int]:
+    """Load each Olist CSV in files_map into Postgres schema `raw`, truncating
+    each table first if it already exists (idempotent — never drops, since
+    dbt's stg_olist_* views depend on these tables after the first run, and a
+    plain DROP TABLE fails once dependent views exist). Returns
+    {table_name: row_count}. Pulled out of the ingest_olist task body so it's
+    directly unit-testable with a fixture data_dir."""
+    import pandas as pd
+    import sqlalchemy
+
+    missing = [f for f in files_map if not (data_dir / f).exists()]
+    if missing:
+        raise FileNotFoundError(
+            f"Missing Olist CSV(s) in {data_dir}: {', '.join(missing)}. "
+            "Download the Kaggle 'Brazilian E-Commerce Public Dataset by "
+            "Olist' (olistbr/brazilian-ecommerce) and place all 9 files "
+            "there — see data/olist/README.md."
+        )
+
+    with engine.begin() as conn:
+        conn.execute(sqlalchemy.text("CREATE SCHEMA IF NOT EXISTS raw"))
+
+    row_counts = {}
+    for filename, table_name in files_map.items():
+        df = pd.read_csv(
+            data_dir / filename,
+            dtype=ZIP_DTYPE_OVERRIDES.get(filename),
+        )
+        with engine.begin() as conn:
+            table_exists = conn.execute(
+                sqlalchemy.text(
+                    "SELECT 1 FROM information_schema.tables "
+                    "WHERE table_schema = 'raw' AND table_name = :table_name"
+                ),
+                {"table_name": table_name},
+            ).fetchone()
+            if table_exists:
+                conn.execute(sqlalchemy.text(f'TRUNCATE TABLE raw."{table_name}"'))
+            df.to_sql(
+                table_name,
+                con=conn,
+                schema="raw",
+                if_exists="append",
+                index=False,
+                chunksize=10_000,
+                method="multi",
+            )
+        row_counts[table_name] = len(df)
+
+    return row_counts
+
+
 # ── Cosmos profile config ──────────────────────────────────────────────────────
 # We use a file-based profile so no Airflow Connection object is required.
 # profiles.yml reads credentials from env vars injected by docker-compose.
@@ -111,22 +172,9 @@ def dbt_pipeline() -> None:
     # ── Step 0: ingest the real-world Olist dataset into the raw schema ───────
     @task
     def ingest_olist() -> dict:
-        """Load the 9 Olist CSVs into Postgres schema `raw` (literal — distinct
-        from dbt's own public_raw seed schema). Idempotent: each table's data
-        is truncated and reloaded in its own transaction on every run (never
-        dropped — dbt's stg_olist_* views depend on these tables after the
-        first run, and a plain DROP TABLE fails once dependent views exist)."""
-        import pandas as pd
+        """Thin Airflow wrapper — see _ingest_olist_files for the actual
+        loading logic (module-level, independently unit-tested)."""
         import sqlalchemy
-
-        missing = [f for f in OLIST_FILES if not (OLIST_DATA_DIR / f).exists()]
-        if missing:
-            raise FileNotFoundError(
-                f"Missing Olist CSV(s) in {OLIST_DATA_DIR}: {', '.join(missing)}. "
-                "Download the Kaggle 'Brazilian E-Commerce Public Dataset by "
-                "Olist' (olistbr/brazilian-ecommerce) and place all 9 files "
-                "there — see data/olist/README.md."
-            )
 
         db_user = os.getenv("WAREHOUSE_DB_USER", "warehouse")
         db_password = os.getenv("WAREHOUSE_DB_PASSWORD", "warehouse")
@@ -134,46 +182,7 @@ def dbt_pipeline() -> None:
         engine = sqlalchemy.create_engine(
             f"postgresql+psycopg2://{db_user}:{db_password}@postgres_warehouse:5432/{db_name}"
         )
-
-        # Zip-code-prefix columns must stay strings or pandas drops leading
-        # zeros on Brazilian CEP codes (e.g. "01046" -> 1046).
-        zip_dtype_overrides = {
-            "olist_customers_dataset.csv": {"customer_zip_code_prefix": str},
-            "olist_sellers_dataset.csv": {"seller_zip_code_prefix": str},
-            "olist_geolocation_dataset.csv": {"geolocation_zip_code_prefix": str},
-        }
-
-        with engine.begin() as conn:
-            conn.execute(sqlalchemy.text("CREATE SCHEMA IF NOT EXISTS raw"))
-
-        row_counts = {}
-        for filename, table_name in OLIST_FILES.items():
-            df = pd.read_csv(
-                OLIST_DATA_DIR / filename,
-                dtype=zip_dtype_overrides.get(filename),
-            )
-            with engine.begin() as conn:
-                table_exists = conn.execute(
-                    sqlalchemy.text(
-                        "SELECT 1 FROM information_schema.tables "
-                        "WHERE table_schema = 'raw' AND table_name = :table_name"
-                    ),
-                    {"table_name": table_name},
-                ).fetchone()
-                if table_exists:
-                    conn.execute(sqlalchemy.text(f'TRUNCATE TABLE raw."{table_name}"'))
-                df.to_sql(
-                    table_name,
-                    con=conn,
-                    schema="raw",
-                    if_exists="append",
-                    index=False,
-                    chunksize=10_000,
-                    method="multi",
-                )
-            row_counts[table_name] = len(df)
-
-        return row_counts
+        return _ingest_olist_files(engine, OLIST_DATA_DIR, OLIST_FILES)
 
     ingest = ingest_olist()
 
