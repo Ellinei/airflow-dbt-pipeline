@@ -1,0 +1,4 @@
+product_id,product_category_name,product_name_lenght,product_description_lenght,product_photos_qty,product_weight_g,product_length_cm,product_height_cm,product_width_cm
+prod_1,informatica_acessorios,45,200,2,500,20,10,15
+prod_2,beleza_saude,38,150,1,300,15,8,12
+prod_3,cama_mesa_banho,50,180,3,1200,40,20,30
