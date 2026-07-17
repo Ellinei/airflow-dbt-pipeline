@@ -24,6 +24,7 @@ scheduled run queues up on first deployment.
 from __future__ import annotations
 
 import os
+import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -34,10 +35,17 @@ from airflow.operators.bash import BashOperator
 from cosmos import DbtTaskGroup, ExecutionConfig, ProfileConfig, ProjectConfig, RenderConfig
 from cosmos.constants import LoadMode
 
-# ── Paths (inside the Airflow containers) ─────────────────────────────────────
-DBT_PROJECT_PATH = Path("/opt/airflow/dbt_project")
+# ── Paths ──────────────────────────────────────────────────────────────────────
+# Computed relative to this file rather than hardcoded to the Docker container
+# path, so DAG parsing also works in CI (dags/../dbt_project resolves to
+# /opt/airflow/dbt_project inside the container — same mount topology — and to
+# <repo_root>/dbt_project when running directly from a checkout).
+DBT_PROJECT_PATH = Path(__file__).resolve().parent.parent / "dbt_project"
 DBT_PROFILES_PATH = DBT_PROJECT_PATH                # profiles.yml lives here
-DBT_EXECUTABLE = Path("/home/airflow/.local/bin/dbt")
+# shutil.which finds dbt on PATH (true in CI, and also true inside the Docker
+# container since pip install puts it on the airflow user's PATH); falls back
+# to the container's known install location if not found on PATH.
+DBT_EXECUTABLE = Path(shutil.which("dbt") or "/home/airflow/.local/bin/dbt")
 
 # ── Olist ingestion paths ──────────────────────────────────────────────────────
 OLIST_DATA_DIR = Path("/opt/airflow/data/olist")
