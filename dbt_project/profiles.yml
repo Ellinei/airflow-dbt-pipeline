@@ -11,8 +11,12 @@ dbt_warehouse:
   outputs:
     dev:
       type: postgres
-      host: postgres_warehouse          # Docker service name — resolves inside the network
-      port: 5432                        # Internal container port (not the host 5433)
+      # Defaults preserve the existing in-container behavior (Docker service
+      # name + internal port); override via WAREHOUSE_DB_HOST/PORT for CI or
+      # host-side dbt CLI usage (matches the pattern already used by
+      # rag/query.py since Phase 0).
+      host: "{{ env_var('WAREHOUSE_DB_HOST', 'postgres_warehouse') }}"
+      port: "{{ env_var('WAREHOUSE_DB_PORT', '5432') | as_number }}"
       user: "{{ env_var('WAREHOUSE_DB_USER') }}"
       password: "{{ env_var('WAREHOUSE_DB_PASSWORD') }}"
       dbname: "{{ env_var('WAREHOUSE_DB_NAME') }}"

@@ -1,0 +1,6 @@
+review_id,order_id,review_score,review_comment_title,review_comment_message,review_creation_date,review_answer_timestamp
+rev_1,order_1,5,great,fast delivery,2024-01-11 00:00:00,2024-01-12 00:00:00
+rev_2,order_2,4,good,as expected,2024-01-13 00:00:00,2024-01-14 00:00:00
+rev_3,order_3,5,excellent,will buy again,2024-02-07 00:00:00,2024-02-08 00:00:00
+rev_4,order_4,3,ok,a bit slow,2024-02-19 00:00:00,2024-02-20 00:00:00
+rev_5,order_5,1,bad,order was canceled,2024-02-26 00:00:00,2024-02-27 00:00:00

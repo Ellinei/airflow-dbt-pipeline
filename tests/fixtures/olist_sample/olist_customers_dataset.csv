@@ -1,0 +1,6 @@
+customer_id,customer_unique_id,customer_zip_code_prefix,customer_city,customer_state
+cust_id_1,cust_unique_1,01001,sao paulo,SP
+cust_id_2,cust_unique_1,01001,sao paulo,SP
+cust_id_3,cust_unique_2,20040,rio de janeiro,RJ
+cust_id_4,cust_unique_3,30140,belo horizonte,MG
+cust_id_5,cust_unique_4,40010,salvador,BA

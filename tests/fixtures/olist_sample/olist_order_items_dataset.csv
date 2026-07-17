@@ -1,0 +1,6 @@
+order_id,order_item_id,product_id,seller_id,shipping_limit_date,price,freight_value
+order_1,1,prod_1,seller_1,2024-01-06 00:00:00,150.00,15.00
+order_2,1,prod_2,seller_2,2024-01-09 00:00:00,80.00,10.00
+order_3,1,prod_1,seller_1,2024-02-02 00:00:00,200.00,20.00
+order_4,1,prod_3,seller_2,2024-02-11 00:00:00,50.00,8.00
+order_5,1,prod_2,seller_1,2024-02-16 00:00:00,60.00,9.00
