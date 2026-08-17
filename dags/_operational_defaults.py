@@ -27,7 +27,7 @@ def slack_alert(context: dict) -> None:
             f"*DAG:* {ti.dag_id}  *Task:* {ti.task_id}\n"
             f"*Log:* {ti.log_url}"
         )
-    })
+    }, timeout=10)
 
 
 def operational_default_args() -> dict:

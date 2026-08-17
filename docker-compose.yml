@@ -17,6 +17,12 @@ x-airflow-common: &airflow-common
   build: .
   image: airflow-dbt-pipeline:latest
   environment: &airflow-common-env
+    # dags/_operational_defaults.py is imported by all 4 DAG files as
+    # `dags._operational_defaults` — only ./dags is volume-mounted (not
+    # the repo root), so /opt/airflow must be on PYTHONPATH for `dags`
+    # to resolve as an importable package. Airflow's own prepare_syspath()
+    # adds /opt/airflow/dags automatically but never its parent.
+    PYTHONPATH: "/opt/airflow"
     # Core
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
