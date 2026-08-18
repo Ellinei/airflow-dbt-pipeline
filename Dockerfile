@@ -76,3 +76,34 @@ RUN pip install --no-cache-dir --constraint "${AIRFLOW_CONSTRAINTS_URL}" \
 # only one that invalidates on changes to the pandas pin — the heavy install
 # above stays cache-identical to prior builds.
 RUN pip install --no-cache-dir --no-deps "pandas==2.1.4"
+
+# ── Bake application code into the image (Phase 4) ────────────────────────────
+# Locally, ./dags and ./dbt_project reach containers via docker-compose.yml
+# bind mounts, which overlay these baked copies at container start — dev/prod
+# behavior is unchanged. ECS Fargate has no bind-mount equivalent, so the
+# image itself must carry the code (see Phase 4 design spec §2).
+#
+# --chown=airflow:0 is required, not optional: plain COPY leaves files owned
+# root:root, mode rwxr-xr-x. The airflow user (uid 50000, gid 0) can read
+# such a directory but cannot write into it — and the RUN below must create
+# dbt_packages/ inside dbt_project/ while running as airflow. Verified
+# empirically (a plain-COPY'd directory rejects `touch` as airflow with
+# Permission denied; a --chown'd one accepts it).
+COPY --chown=airflow:0 dags/ /opt/airflow/dags/
+# dbt_project/ must land as a sibling of dags/ under /opt/airflow —
+# dbt_pipeline_dag.py computes DBT_PROJECT_PATH as
+# Path(__file__).resolve().parent.parent / "dbt_project", i.e.
+# /opt/airflow/dags/../dbt_project = /opt/airflow/dbt_project.
+COPY --chown=airflow:0 dbt_project/ /opt/airflow/dbt_project/
+# Resolves dbt_packages/ at build time so Cosmos's LoadMode.DBT_LS (which
+# shells out to `dbt ls` at DAG-parse time) doesn't fail silently on a fresh
+# Fargate task — mirrors what the one-shot airflow-init Compose service does
+# locally. No throwaway WAREHOUSE_DB_* build ARGs needed: verified
+# empirically that `dbt deps` succeeds without them (it doesn't render
+# profiles.yml's target-specific env_var() calls).
+RUN dbt deps --project-dir /opt/airflow/dbt_project --profiles-dir /opt/airflow/dbt_project
+
+# plugins/ is deliberately NOT copied — it's .gitignore'd and empty on a
+# fresh checkout; COPY from a path absent in the build context fails the
+# build outright. The base image's own empty /opt/airflow/plugins is
+# sufficient since nothing in this project populates it.
