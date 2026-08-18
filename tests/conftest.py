@@ -19,7 +19,10 @@ def dbt_deps():
     dbt_project/dbt_packages/ isn't populated yet — mirrors what airflow-init
     does in docker-compose before the scheduler ever parses DAGs."""
     dbt_exe = shutil.which("dbt")
-    assert dbt_exe, "dbt not found on PATH — install project requirements first"
+    if not dbt_exe:
+        # Skip if dbt is not found (e.g., running on Windows without Docker
+        # for tests like test_cloud_deployment.py that don't import dags)
+        return
     subprocess.run(
         [dbt_exe, "deps", "--project-dir", str(DBT_PROJECT_DIR),
          "--profiles-dir", str(DBT_PROJECT_DIR)],
