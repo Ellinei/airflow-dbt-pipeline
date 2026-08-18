@@ -7,7 +7,7 @@
 # The variables are injected by docker-compose from the .env file.
 
 dbt_warehouse:
-  target: dev
+  target: "{{ env_var('DBT_TARGET', 'dev') }}"
   outputs:
     dev:
       type: postgres
@@ -21,5 +21,18 @@ dbt_warehouse:
       password: "{{ env_var('WAREHOUSE_DB_PASSWORD') }}"
       dbname: "{{ env_var('WAREHOUSE_DB_NAME') }}"
       schema: public                    # Default schema; models override via +schema config
+      threads: 4
+      connect_timeout: 10
+    # Same env_var() names as dev — differentiation comes from which stack's
+    # env vars are live at runtime (dev vs prod docker-compose invocation),
+    # not from different variable names.
+    prod:
+      type: postgres
+      host: "{{ env_var('WAREHOUSE_DB_HOST', 'postgres_warehouse') }}"
+      port: "{{ env_var('WAREHOUSE_DB_PORT', '5432') | as_number }}"
+      user: "{{ env_var('WAREHOUSE_DB_USER') }}"
+      password: "{{ env_var('WAREHOUSE_DB_PASSWORD') }}"
+      dbname: "{{ env_var('WAREHOUSE_DB_NAME') }}"
+      schema: public
       threads: 4
       connect_timeout: 10
