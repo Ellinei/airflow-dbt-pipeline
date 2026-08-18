@@ -1,10 +1,14 @@
 ---
 # ══════════════════════════════════════════════════════════════════════════════
-#  Airflow + dbt + PostgreSQL — local development stack
-#  Airflow UI  → http://localhost:8080  (admin / see AIRFLOW_ADMIN_PASSWORD in .env)
-#  Warehouse   → localhost:5433         (see WAREHOUSE_DB_USER/PASSWORD in .env)
-#  OM Catalog  → http://localhost:8585  (admin / see .env)  [--profile catalog]
-#  Credentials are generated per .env.example — see README for setup.
+#  Airflow + dbt + PostgreSQL — dev/prod stacks (Phase 3)
+#  Dev  (default, unchanged):  docker compose up -d
+#    Airflow UI → http://localhost:8080 | Warehouse → localhost:5433
+#  Prod (side-by-side, via .env.prod):
+#    docker compose -p airflow-dbt-prod --env-file .env.prod up -d
+#    Airflow UI → http://localhost:8090 | Warehouse → localhost:5443
+#    mlflow-server auto-starts (COMPOSE_PROFILES=prod-core in .env.prod).
+#  OM Catalog  → http://localhost:8585  (admin / see .env)  [--profile catalog, dev only]
+#  Credentials are generated per .env.example / .env.prod.example — see README.
 # ══════════════════════════════════════════════════════════════════════════════
 version: "3.8"
 
@@ -36,6 +40,7 @@ x-airflow-common: &airflow-common
     WAREHOUSE_DB_USER: "${WAREHOUSE_DB_USER}"
     WAREHOUSE_DB_PASSWORD: "${WAREHOUSE_DB_PASSWORD}"
     WAREHOUSE_DB_NAME: "${WAREHOUSE_DB_NAME}"
+    DBT_TARGET: "${DBT_TARGET:-dev}"
     # Disable OpenLineage: Cosmos 1.4.x bundles dbt-ol which only supports dbt
     # manifest schema ≤v7, but dbt 1.8 produces v12 → post-run crash despite
     # dbt itself succeeding.  Disabling prevents the AirflowCompatibilityError.
@@ -60,13 +65,12 @@ services:
   # ── 1. Airflow metadata database ────────────────────────────────────────────
   postgres_airflow:
     image: postgres:15
-    container_name: postgres_airflow
     environment:
       POSTGRES_USER: "${AIRFLOW_DB_USER}"
       POSTGRES_PASSWORD: "${AIRFLOW_DB_PASSWORD}"
       POSTGRES_DB: "${AIRFLOW_DB_NAME}"
     ports:
-      - "5432:5432"
+      - "${AIRFLOW_DB_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "${AIRFLOW_DB_USER}"]
       interval: 10s
@@ -80,13 +84,12 @@ services:
   # ── 2. Data warehouse database ───────────────────────────────────────────────
   postgres_warehouse:
     image: pgvector/pgvector:pg15
-    container_name: postgres_warehouse
     environment:
       POSTGRES_USER: "${WAREHOUSE_DB_USER}"
       POSTGRES_PASSWORD: "${WAREHOUSE_DB_PASSWORD}"
       POSTGRES_DB: "${WAREHOUSE_DB_NAME}"
     ports:
-      - "5433:5432"          # Host 5433 → container 5432 (avoids clash with metadata DB)
+      - "${WAREHOUSE_DB_PORT:-5433}:5432"          # Host 5433 → container 5432 (avoids clash with metadata DB)
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "${WAREHOUSE_DB_USER}"]
       interval: 10s
@@ -102,7 +105,6 @@ services:
   # Runs DB migrations and creates the admin user, then exits.
   airflow-init:
     <<: *airflow-common
-    container_name: airflow_init
     entrypoint: /bin/bash
     command:
       - -c
@@ -128,10 +130,9 @@ services:
   # ── 4. Airflow webserver ─────────────────────────────────────────────────────
   airflow-webserver:
     <<: *airflow-common
-    container_name: airflow_webserver
     command: webserver
     ports:
-      - "8080:8080"
+      - "${AIRFLOW_WEBSERVER_PORT:-8080}:8080"
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
       interval: 30s
@@ -147,7 +148,6 @@ services:
   # ── 5. Airflow scheduler ─────────────────────────────────────────────────────
   airflow-scheduler:
     <<: *airflow-common
-    container_name: airflow_scheduler
     command: scheduler
     depends_on:
       <<: *airflow-common-depends-on
@@ -157,9 +157,8 @@ services:
 
   # ── 6. MLflow tracking server ────────────────────────────────────────────────
   mlflow-server:
-    container_name: mlflow_server
     image: ghcr.io/mlflow/mlflow:v2.15.0
-    profiles: ["mlops"]
+    profiles: ["mlops", "prod-core"]
     command: >
       mlflow server
       --backend-store-uri sqlite:////mlflow/mlflow.db
@@ -168,7 +167,7 @@ services:
       --host 0.0.0.0
       --port 5000
     ports:
-      - "5000:5000"
+      - "${MLFLOW_PORT:-5000}:5000"
     volumes:
       - mlflow-data:/mlflow
     restart: unless-stopped
