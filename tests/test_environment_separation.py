@@ -69,7 +69,7 @@ CORE_SERVICES_WITHOUT_CONTAINER_NAME = {
 
 def test_core_services_have_no_container_name():
     """Only these five (plus mlflow-server, checked separately) must lose
-    container_name — OpenMetadata's six services intentionally keep theirs:
+    container_name — OpenMetadata's five services intentionally keep theirs:
     they're dev-only/opt-in in both stacks and never run in prod, so no
     cross-project collision is possible."""
     compose = yaml.safe_load((REPO_ROOT / "docker-compose.yml").read_text())
@@ -82,6 +82,8 @@ def test_dbt_target_forwarded_to_containers():
     compose = yaml.safe_load((REPO_ROOT / "docker-compose.yml").read_text())
     env = compose["x-airflow-common"]["environment"]
     assert env["DBT_TARGET"] == "${DBT_TARGET:-dev}"
+    assert "WAREHOUSE_DB_PORT" not in env
+    assert "WAREHOUSE_DB_HOST" not in env
 
 
 def test_mlflow_server_has_both_profiles():
