@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -88,3 +89,22 @@ def test_mlflow_server_has_both_profiles():
     profiles = compose["services"]["mlflow-server"]["profiles"]
     assert set(profiles) == {"mlops", "prod-core"}
     assert "container_name" not in compose["services"]["mlflow-server"]
+
+
+ENV_VAR_NAME_RE = re.compile(r"^([A-Z_][A-Z0-9_]*)=", re.MULTILINE)
+
+
+def _env_var_names(path: Path) -> set[str]:
+    return set(ENV_VAR_NAME_RE.findall(path.read_text()))
+
+
+def test_env_prod_example_has_same_variable_names_as_env_example():
+    dev_names = _env_var_names(REPO_ROOT / ".env.example")
+    prod_names = _env_var_names(REPO_ROOT / ".env.prod.example")
+    assert prod_names == dev_names
+
+
+def test_gitignore_ignores_env_prod_literally():
+    gitignore_lines = (REPO_ROOT / ".gitignore").read_text().splitlines()
+    assert ".env.prod" in gitignore_lines
+    assert not any(line.strip() == ".env.*" for line in gitignore_lines)
