@@ -59,10 +59,31 @@ docker compose -p airflow-dbt-prod --env-file .env.prod up -d
 extra `--profile` flag needed on the command line (dev still requires `--profile mlops` to start it
 manually).
 
-> **Shared bind mounts:** host directories (`./dags`, `./logs`, `./dbt_project`, `./data`) are
-> mounted into *both* stacks — only containers, volumes, and ports are isolated per project. Avoid
-> triggering `dbt_pipeline` in both stacks at the same moment; they'd race on the shared
-> `dbt_project/target/`/`dbt_packages/` directories.
+> **Shared between both stacks:** host directories (`./dags`, `./logs`, `./dbt_project`, `./data`)
+> are mounted into *both* stacks, and the Docker image tag they build/run from is also shared —
+> containers, volumes, and ports are the only things isolated per project. Concretely:
+> - **`./logs`** is written by both stacks' schedulers unconditionally, from the moment both stacks
+>   are up — no DAG needs to run. Both append to
+>   `logs/dag_processor_manager/dag_processor_manager.log` and write into
+>   `logs/scheduler/<date>/` continuously. Because both stacks also share `./dags` (identical DAG
+>   definitions) and both run `@daily`, an unpaused DAG in both stacks produces the *same* `run_id`,
+>   so task logs land at the *same* path (`logs/dag_id=…/run_id=scheduled__…/task_id=…/attempt=1.log`)
+>   — prod's UI could end up serving a file dev also wrote.
+> - **`dbt_project/target/`/`dbt_packages/`** race if `dbt_pipeline` is triggered in both stacks at
+>   the same moment — avoid running it in both at once.
+> - **The image tag `airflow-dbt-pipeline:latest`** (`x-airflow-common.image` in
+>   `docker-compose.yml`) is daemon-global, not project-scoped — rebuilding from either stack retags
+>   what the other picks up on its next container recreate. This never actually breaks anything
+>   (identical Dockerfile, shared `./dags` guarantees identical code either way) but it is a shared
+>   resource, not an isolated one.
+>
+> **Container renaming:** this phase also removed `container_name:` from dev's core services, so the
+> next `docker compose up -d` you run recreates dev's containers under Compose's auto-generated
+> names (e.g. `postgres_airflow` → `airflowdbtpipeline-postgres_airflow-1`). Data is unaffected —
+> named volumes are unchanged, only container identity changes — but any personal script or alias
+> that calls `docker exec -it postgres_warehouse ...` (or similar literal names) will break with "No
+> such container" until updated to `docker compose exec <service-name>` (see "Run dbt manually
+> inside the scheduler container" below).
 
 ---
 
@@ -226,7 +247,7 @@ docker compose -p airflow-dbt-prod --env-file .env.prod up -d
 #    http://localhost:8090   login: admin / $AIRFLOW_ADMIN_PASSWORD (see .env.prod)
 ```
 
-See "Running dev and prod side by side" above for the shared-bind-mount caveat.
+See "Running dev and prod side by side" above for the shared-resource and container-renaming caveats.
 
 ### Run dbt manually inside the scheduler container
 
@@ -254,6 +275,8 @@ Database: $WAREHOUSE_DB_NAME  (see .env — default "warehouse")
 User:     $WAREHOUSE_DB_USER  (see .env — default "warehouse")
 Password: $WAREHOUSE_DB_PASSWORD  (see .env)
 ```
+
+(Prod stack: port 5443, see `.env.prod`.)
 
 ---
 
@@ -306,7 +329,7 @@ Password: $WAREHOUSE_DB_PASSWORD  (see .env)
 | Cosmos `LoadMode.DBT_LS` | Cosmos calls `dbt ls` at scheduler startup to auto-discover all models. You get one Airflow task per node without hard-coding anything. |
 | File-based `profiles.yml` | Avoids needing an Airflow Connection object for the warehouse — credentials flow from `.env` → docker-compose env vars → dbt `env_var()`. |
 | Staging as VIEWs, Marts as TABLEs | Standard dbt layering: staging is cheap to rebuild, marts are materialised for BI performance. |
-| One shared `docker-compose.yml` for dev + prod | Every dev/prod difference is a scalar env-var value (ports, `DBT_TARGET`, `COMPOSE_PROFILES`), not structure — avoids double-maintaining service definitions across two files. Trade-off: host bind mounts (`./dags`, `./dbt_project`, etc.) are shared between both stacks, so avoid running `dbt_pipeline` in both at once. |
+| One shared `docker-compose.yml` for dev + prod | Every dev/prod difference is a scalar env-var value (ports, `DBT_TARGET`, `COMPOSE_PROFILES`), not structure — avoids double-maintaining service definitions across two files. Trade-off: host bind mounts (`./dags`, `./logs`, `./dbt_project`, etc.) are shared between both stacks, so avoid running `dbt_pipeline` in both at once. |
 
 ---
 

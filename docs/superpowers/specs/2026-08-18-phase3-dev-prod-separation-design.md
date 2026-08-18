@@ -107,7 +107,7 @@ also `DBT_TARGET`-driven, so every dbt invocation in a stack is consistent.
   `command:` and the container side of the mapping stay untouched); remove `container_name` (needed
   because a dev user opting into `--profile mlops` while prod — which now always includes
   `mlflow-server` — is running would otherwise collide on the literal daemon-global name).
-- OpenMetadata's six services (`openmetadata-mysql`, `openmetadata-elasticsearch`,
+- OpenMetadata's five services (`openmetadata-mysql`, `openmetadata-elasticsearch`,
   `openmetadata-migrate`, `openmetadata-server`, `openmetadata-ingestion`) **keep their
   `container_name` and stay dev-only/opt-in in both stacks** — nothing at runtime depends on them
   (unlike `mlflow-server`), so they are out of scope for prod entirely and their names never collide
@@ -164,7 +164,7 @@ the pytest session) and `tests/test_operational_defaults.py` (module-level `REPO
 | `DBT_TARGET` unset/`=prod` via clean subprocess import | `PROFILE_CONFIG.target_name` resolves to `"dev"` / `"prod"` |
 | `profiles.yml` structure | has a `prod` key under `dbt_warehouse.outputs`; top-level `target` is the `env_var(...)` Jinja string |
 | Compose port templating | `postgres_airflow`/`postgres_warehouse`/`airflow-webserver`/`mlflow-server` ports are `${VAR:-default}` strings, not literals |
-| No `container_name` on core services | **exactly** `postgres_airflow`, `postgres_warehouse`, `airflow-init`, `airflow-webserver`, `airflow-scheduler` — enumerated explicitly, not "no service anywhere," since the six OpenMetadata services intentionally keep theirs (dev-only, never run in prod, so no collision risk) |
+| No `container_name` on core services | **exactly** `postgres_airflow`, `postgres_warehouse`, `airflow-init`, `airflow-webserver`, `airflow-scheduler` — enumerated explicitly, not "no service anywhere," since the five OpenMetadata services intentionally keep theirs (dev-only, never run in prod, so no collision risk) |
 | `x-airflow-common.environment.DBT_TARGET` | `== "${DBT_TARGET:-dev}"` |
 | `mlflow-server` profiles | list contains both `"mlops"` and `"prod-core"` |
 | `.env.prod.example` / `.env.example` parity | regex-extracted `KEY=` name sets are exactly equal (regex must match `KEY=` with an empty value too, e.g. `SLACK_WEBHOOK_URL=`, `OPENAI_API_KEY=`) |
