@@ -31,13 +31,38 @@ Two pipelines run side by side on the same infrastructure:
 └───────────────────────────────────────────────────────────────┘
 ```
 
-| Service               | Purpose                              | Host port |
-|-----------------------|--------------------------------------|-----------|
-| `airflow-webserver`   | Airflow UI                           | 8080      |
-| `airflow-scheduler`   | DAG scheduling                       | —         |
-| `airflow-init`        | One-shot DB migration + admin user   | —         |
-| `postgres_airflow`    | Airflow metadata store               | 5432      |
-| `postgres_warehouse`  | dbt target / data warehouse          | 5433      |
+| Service               | Purpose                                                              | Dev port | Prod port | Env var |
+|-----------------------|-----------------------------------------------------------------------|----------|-----------|---------|
+| `airflow-webserver`   | Airflow UI                                                           | 8080     | 8090      | `AIRFLOW_WEBSERVER_PORT` |
+| `airflow-scheduler`   | DAG scheduling                                                       | —        | —         | — |
+| `airflow-init`        | One-shot DB migration + admin user                                   | —        | —         | — |
+| `postgres_airflow`    | Airflow metadata store                                               | 5432     | 5442      | `AIRFLOW_DB_PORT` |
+| `postgres_warehouse`  | dbt target / data warehouse                                          | 5433     | 5443      | `WAREHOUSE_DB_PORT` |
+| `mlflow-server`       | MLflow tracking UI + artifact store (`--profile mlops` in dev; always-on in prod) | 5000     | 5010      | `MLFLOW_PORT` |
+
+---
+
+## Running dev and prod side by side
+
+A second "prod" stack can run at the same time as dev, on the same machine, using the same
+`docker-compose.yml` — every difference between them is an env var, not a second compose file.
+
+```bash
+# Dev (default — unchanged, no -p flag, keeps existing containers/volumes)
+docker compose up -d
+
+# Prod (side by side — separate project name + separate env file)
+docker compose -p airflow-dbt-prod --env-file .env.prod up -d
+```
+
+`mlflow-server` auto-starts in the prod stack via `COMPOSE_PROFILES=prod-core` in `.env.prod` — no
+extra `--profile` flag needed on the command line (dev still requires `--profile mlops` to start it
+manually).
+
+> **Shared bind mounts:** host directories (`./dags`, `./logs`, `./dbt_project`, `./data`) are
+> mounted into *both* stacks — only containers, volumes, and ports are isolated per project. Avoid
+> triggering `dbt_pipeline` in both stacks at the same moment; they'd race on the shared
+> `dbt_project/target/`/`dbt_packages/` directories.
 
 ---
 
@@ -156,6 +181,10 @@ generate a fresh Airflow Fernet key.
 > key, default admin password, OpenMetadata service passwords) that predate this file. They have
 > since been rotated; current credentials live only in your own `.env`.
 
+For the optional prod stack, copy `.env.prod.example` to `.env.prod` and fill in **independently
+generated** secrets — never copy values from `.env`. `.env.prod` is gitignored the same way `.env`
+is.
+
 If you use the optional `catalog` profile (OpenMetadata), the ingestion CLI configs are
 generated from tracked templates rather than committed directly:
 ```bash
@@ -184,12 +213,31 @@ docker compose logs -f airflow-init
 # 5. Trigger the DAG manually from the UI, or wait for the daily schedule
 ```
 
+### Prod stack (optional, runs alongside dev)
+
+```bash
+# 1. Copy the prod template and fill in independently-generated secrets
+cp .env.prod.example .env.prod
+
+# 2. Start the prod stack under its own Compose project name
+docker compose -p airflow-dbt-prod --env-file .env.prod up -d
+
+# 3. Open the prod Airflow UI
+#    http://localhost:8090   login: admin / $AIRFLOW_ADMIN_PASSWORD (see .env.prod)
+```
+
+See "Running dev and prod side by side" above for the shared-bind-mount caveat.
+
 ### Run dbt manually inside the scheduler container
 
 ```bash
-docker exec -it airflow_scheduler bash
+docker compose exec airflow-scheduler bash
+# Prod stack equivalent:
+docker compose -p airflow-dbt-prod --env-file .env.prod exec airflow-scheduler bash
+```
 
-# Inside the container:
+Inside the container:
+```bash
 cd /opt/airflow/dbt_project
 dbt seed   --profiles-dir .
 dbt run    --profiles-dir .
@@ -215,6 +263,8 @@ Password: $WAREHOUSE_DB_PASSWORD  (see .env)
 .
 ├── .env                          # Credentials (never commit to git)
 ├── .env.example                  # Template listing every required variable
+├── .env.prod                     # Prod stack credentials (never commit to git)
+├── .env.prod.example             # Template listing every required prod variable
 ├── docker-compose.yml            # All services
 ├── Dockerfile                    # Custom Airflow image (dbt, Cosmos, pandas, mlflow...)
 ├── dags/
@@ -256,6 +306,7 @@ Password: $WAREHOUSE_DB_PASSWORD  (see .env)
 | Cosmos `LoadMode.DBT_LS` | Cosmos calls `dbt ls` at scheduler startup to auto-discover all models. You get one Airflow task per node without hard-coding anything. |
 | File-based `profiles.yml` | Avoids needing an Airflow Connection object for the warehouse — credentials flow from `.env` → docker-compose env vars → dbt `env_var()`. |
 | Staging as VIEWs, Marts as TABLEs | Standard dbt layering: staging is cheap to rebuild, marts are materialised for BI performance. |
+| One shared `docker-compose.yml` for dev + prod | Every dev/prod difference is a scalar env-var value (ports, `DBT_TARGET`, `COMPOSE_PROFILES`), not structure — avoids double-maintaining service definitions across two files. Trade-off: host bind mounts (`./dags`, `./dbt_project`, etc.) are shared between both stacks, so avoid running `dbt_pipeline` in both at once. |
 
 ---
 
@@ -267,4 +318,8 @@ docker compose down
 
 # Full reset — removes ALL data including the warehouse
 docker compose down -v
+
+# Prod stack equivalents
+docker compose -p airflow-dbt-prod --env-file .env.prod down
+docker compose -p airflow-dbt-prod --env-file .env.prod down -v
 ```
