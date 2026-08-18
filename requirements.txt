@@ -16,6 +16,11 @@
 # caused the original backtracking this file replaces). Their exact pinned
 # versions (dbt-postgres==1.8.0, pandas==2.1.4) live inline in the Dockerfile.
 #
+# apache-airflow-providers-amazon (added Phase 4) resolves cleanly in this
+# joint install — verified empirically, ~2.5 min, no backtracking — because
+# its only meaningful new dependencies (boto3/botocore) have no version
+# conflicts with anything else pinned here or in Airflow's own constraints.
+#
 # To regenerate after a version bump: rerun the same pip install (with the
 # same constraints URL) in a throwaway container, confirm it resolves cleanly
 # and the stack comes up healthy, then update the versions below (and the
@@ -26,3 +31,4 @@ astronomer-cosmos==1.4.3
 mlflow==2.22.5
 scikit-learn==1.9.0
 openai==1.25.0
+apache-airflow-providers-amazon==8.20.0
