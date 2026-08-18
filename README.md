@@ -243,7 +243,18 @@ cp .env.prod.example .env.prod
 # 2. Start the prod stack under its own Compose project name
 docker compose -p airflow-dbt-prod --env-file .env.prod up -d
 
-# 3. Open the prod Airflow UI
+# 3. Bootstrap the engineer/analyst roles against the NEW prod warehouse — every
+#    dbt model has a grant_select() post-hook that requires these roles to
+#    exist, and prod's warehouse is a fresh, independent database that never
+#    inherits dev's roles. Skipping this step fails dbt_pipeline's very first
+#    run in prod with "role engineer does not exist".
+docker compose -p airflow-dbt-prod --env-file .env.prod exec -T postgres_warehouse \
+  psql -U warehouse -d warehouse \
+  -v engineer_password="$GOVERNANCE_ENGINEER_PASSWORD" \
+  -v analyst_password="$GOVERNANCE_ANALYST_PASSWORD" \
+  < governance/setup_roles.sql
+
+# 4. Open the prod Airflow UI
 #    http://localhost:8090   login: admin / $AIRFLOW_ADMIN_PASSWORD (see .env.prod)
 ```
 
