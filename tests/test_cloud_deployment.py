@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -46,3 +47,11 @@ def test_warehouse_engine_url_uses_rds_host_and_port_when_set():
         "WAREHOUSE_DB_PORT": "5433",
     })
     assert "@my-rds-endpoint.rds.amazonaws.com:5433/" in url
+
+
+def test_dockerfile_bakes_dags_and_dbt_project():
+    dockerfile = (REPO_ROOT / "Dockerfile").read_text()
+    assert "COPY --chown=airflow:0 dags/ /opt/airflow/dags/" in dockerfile
+    assert "COPY --chown=airflow:0 dbt_project/ /opt/airflow/dbt_project/" in dockerfile
+    assert re.search(r"^RUN .*dbt deps", dockerfile, re.MULTILINE)
+    assert "COPY plugins/" not in dockerfile
