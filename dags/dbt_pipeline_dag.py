@@ -70,6 +70,29 @@ ZIP_DTYPE_OVERRIDES = {
 }
 
 
+def _download_olist_from_s3(bucket: str, prefix: str, dest: Path) -> None:
+    """Pulls each Olist CSV from s3://{bucket}/{prefix} into dest (creating
+    it if needed) via boto3. ECS Fargate's ephemeral storage has no
+    persistent Olist data between task starts — see Phase 4 design spec §3."""
+    import boto3
+
+    dest.mkdir(parents=True, exist_ok=True)
+    client = boto3.client("s3")
+    for filename in OLIST_FILES:
+        client.download_file(bucket, f"{prefix}{filename}", str(dest / filename))
+
+
+def _ensure_olist_data_available(
+    data_dir: Path, files_map: dict[str, str], bucket: str | None
+) -> None:
+    """No-op when files are already present in data_dir, or when no S3
+    bucket is configured — which is always true in local dev/prod, where
+    OLIST_S3_BUCKET is unset, so local behavior is unchanged. Downloads all
+    files from S3 only when at least one is missing and a bucket is set."""
+    if bucket and not all((data_dir / f).exists() for f in files_map):
+        _download_olist_from_s3(bucket=bucket, prefix="olist-raw/", dest=data_dir)
+
+
 def _warehouse_engine_url() -> str:
     """Builds the SQLAlchemy engine URL for the warehouse DB from env vars,
     with the same postgres_warehouse:5432 fallback Compose has always used
@@ -176,6 +199,7 @@ def dbt_pipeline() -> None:
         loading logic (module-level, independently unit-tested)."""
         import sqlalchemy
 
+        _ensure_olist_data_available(OLIST_DATA_DIR, OLIST_FILES, os.getenv("OLIST_S3_BUCKET"))
         engine = sqlalchemy.create_engine(_warehouse_engine_url())
         return _ingest_olist_files(engine, OLIST_DATA_DIR, OLIST_FILES)
 
