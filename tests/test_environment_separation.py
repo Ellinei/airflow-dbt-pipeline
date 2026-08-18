@@ -46,3 +46,45 @@ def test_profiles_yml_has_prod_target_and_env_var_default():
     outputs = profiles["dbt_warehouse"]["outputs"]
     assert "prod" in outputs
     assert profiles["dbt_warehouse"]["target"] == "{{ env_var('DBT_TARGET', 'dev') }}"
+
+
+def test_core_service_ports_are_templated():
+    compose = yaml.safe_load((REPO_ROOT / "docker-compose.yml").read_text())
+    services = compose["services"]
+    assert services["postgres_airflow"]["ports"] == ["${AIRFLOW_DB_PORT:-5432}:5432"]
+    assert services["postgres_warehouse"]["ports"] == ["${WAREHOUSE_DB_PORT:-5433}:5432"]
+    assert services["airflow-webserver"]["ports"] == ["${AIRFLOW_WEBSERVER_PORT:-8080}:8080"]
+    assert services["mlflow-server"]["ports"] == ["${MLFLOW_PORT:-5000}:5000"]
+
+
+CORE_SERVICES_WITHOUT_CONTAINER_NAME = {
+    "postgres_airflow",
+    "postgres_warehouse",
+    "airflow-init",
+    "airflow-webserver",
+    "airflow-scheduler",
+}
+
+
+def test_core_services_have_no_container_name():
+    """Only these five (plus mlflow-server, checked separately) must lose
+    container_name — OpenMetadata's six services intentionally keep theirs:
+    they're dev-only/opt-in in both stacks and never run in prod, so no
+    cross-project collision is possible."""
+    compose = yaml.safe_load((REPO_ROOT / "docker-compose.yml").read_text())
+    services = compose["services"]
+    for service_name in CORE_SERVICES_WITHOUT_CONTAINER_NAME:
+        assert "container_name" not in services[service_name], service_name
+
+
+def test_dbt_target_forwarded_to_containers():
+    compose = yaml.safe_load((REPO_ROOT / "docker-compose.yml").read_text())
+    env = compose["x-airflow-common"]["environment"]
+    assert env["DBT_TARGET"] == "${DBT_TARGET:-dev}"
+
+
+def test_mlflow_server_has_both_profiles():
+    compose = yaml.safe_load((REPO_ROOT / "docker-compose.yml").read_text())
+    profiles = compose["services"]["mlflow-server"]["profiles"]
+    assert set(profiles) == {"mlops", "prod-core"}
+    assert "container_name" not in compose["services"]["mlflow-server"]
