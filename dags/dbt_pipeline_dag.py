@@ -70,6 +70,20 @@ ZIP_DTYPE_OVERRIDES = {
 }
 
 
+def _warehouse_engine_url() -> str:
+    """Builds the SQLAlchemy engine URL for the warehouse DB from env vars,
+    with the same postgres_warehouse:5432 fallback Compose has always used
+    locally, so dev/prod behavior is unchanged. Pulled out of ingest_olist so
+    it's testable via a clean-subprocess import without executing the task
+    through Airflow — same rationale as _ingest_olist_files below."""
+    db_user = os.getenv("WAREHOUSE_DB_USER", "warehouse")
+    db_password = os.getenv("WAREHOUSE_DB_PASSWORD", "warehouse")
+    db_name = os.getenv("WAREHOUSE_DB_NAME", "warehouse")
+    db_host = os.getenv("WAREHOUSE_DB_HOST", "postgres_warehouse")
+    db_port = os.getenv("WAREHOUSE_DB_PORT", "5432")
+    return f"postgresql+psycopg2://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+
+
 def _ingest_olist_files(engine, data_dir: Path, files_map: dict[str, str]) -> dict[str, int]:
     """Load each Olist CSV in files_map into Postgres schema `raw`, truncating
     each table first if it already exists (idempotent — never drops, since
@@ -162,12 +176,7 @@ def dbt_pipeline() -> None:
         loading logic (module-level, independently unit-tested)."""
         import sqlalchemy
 
-        db_user = os.getenv("WAREHOUSE_DB_USER", "warehouse")
-        db_password = os.getenv("WAREHOUSE_DB_PASSWORD", "warehouse")
-        db_name = os.getenv("WAREHOUSE_DB_NAME", "warehouse")
-        engine = sqlalchemy.create_engine(
-            f"postgresql+psycopg2://{db_user}:{db_password}@postgres_warehouse:5432/{db_name}"
-        )
+        engine = sqlalchemy.create_engine(_warehouse_engine_url())
         return _ingest_olist_files(engine, OLIST_DATA_DIR, OLIST_FILES)
 
     ingest = ingest_olist()
