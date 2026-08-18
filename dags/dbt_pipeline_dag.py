@@ -127,7 +127,7 @@ def _ingest_olist_files(engine, data_dir: Path, files_map: dict[str, str]) -> di
 # profiles.yml reads credentials from env vars injected by docker-compose.
 PROFILE_CONFIG = ProfileConfig(
     profile_name="dbt_warehouse",
-    target_name="dev",
+    target_name=os.getenv("DBT_TARGET", "dev"),
     profiles_yml_filepath=DBT_PROFILES_PATH / "profiles.yml",
 )
 
