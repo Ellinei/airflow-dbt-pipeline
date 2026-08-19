@@ -114,7 +114,7 @@ resource "aws_security_group" "rds_sg" {
   }
 
   ingress {
-    description     = "PostgreSQL from ECS tasks (same-VPC traffic resolves to RDS's private IP, so it never matches operator_ip/32)"
+    description     = "PostgreSQL from ECS tasks (same-VPC traffic resolves to the RDS private IP, so it never matches operator_ip/32)"
     from_port       = 5432
     to_port         = 5432
     protocol        = "tcp"
