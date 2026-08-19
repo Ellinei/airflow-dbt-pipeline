@@ -383,8 +383,8 @@ GitHub repo ──(workflow_dispatch, OIDC)──► GitHub Actions ──build/
 - Your current public IPv4 address: `curl ifconfig.me`
 - The Olist CSVs already present at `data/olist/*.csv` before you reach step 7 — `data/` is
   gitignored, so a fresh clone won't have them; see [Real-World Data Pipeline
-  (Olist)](#real-world-data-pipeline-olist) to download them (or run the local stack's `ingest_olist`
-  once) beforehand
+  (Olist)](#real-world-data-pipeline-olist) to download them from Kaggle beforehand (`ingest_olist`
+  loads these CSVs into Postgres, it does not fetch them)
 
 ### 3. First-time setup
 
