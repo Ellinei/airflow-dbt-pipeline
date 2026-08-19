@@ -23,6 +23,7 @@ resource "aws_db_instance" "main" {
   instance_class    = var.db_instance_class
   allocated_storage = 20
   storage_type      = "gp3"
+  storage_encrypted = true # default AWS-managed KMS key, no extra cost; must be set pre-apply — enabling later forces replacement
 
   db_name  = "airflow"
   username = var.db_master_username
