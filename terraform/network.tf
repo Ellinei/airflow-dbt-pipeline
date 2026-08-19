@@ -102,7 +102,7 @@ resource "aws_security_group" "ecs_sg" {
 
 resource "aws_security_group" "rds_sg" {
   name        = "${var.project_name}-rds-sg"
-  description = "RDS PostgreSQL: operator ingress only, no egress"
+  description = "RDS PostgreSQL: ingress from operator and ECS tasks only, no egress"
   vpc_id      = aws_vpc.main.id
 
   ingress {
@@ -111,6 +111,14 @@ resource "aws_security_group" "rds_sg" {
     to_port     = 5432
     protocol    = "tcp"
     cidr_blocks = ["${var.operator_ip}/32"]
+  }
+
+  ingress {
+    description     = "PostgreSQL from ECS tasks (same-VPC traffic resolves to RDS's private IP, so it never matches operator_ip/32)"
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.ecs_sg.id]
   }
 
   tags = {
