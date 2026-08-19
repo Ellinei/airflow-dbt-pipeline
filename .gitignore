@@ -40,3 +40,8 @@ data/olist/*.csv
 #    credentials interpolated from .env) — templates themselves stay tracked ──
 openmetadata/*.yaml
 !openmetadata/*.yaml.template
+
+# ── Terraform (Phase 4) ─────────────────────────────────────────────────────
+terraform/*.tfstate*
+terraform/.terraform/
+terraform/terraform.tfvars
