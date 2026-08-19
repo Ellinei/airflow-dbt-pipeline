@@ -26,3 +26,8 @@ variable "db_master_username" {
   type        = string
   default     = "dbadmin"
 }
+
+variable "github_repo" {
+  description = "\"owner/repo\" this GitHub Actions OIDC role trusts, e.g. \"your-username/airflow-dbt-pipeline\". No default: must be supplied to scope the trust policy to this repo only."
+  type        = string
+}
