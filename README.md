@@ -417,10 +417,25 @@ aws secretsmanager put-secret-value \
 Three ordered steps, run once per fresh `terraform apply`:
 
 1. **Airflow metadata migrate + admin user**, via a one-off `aws ecs run-task` against the scheduler
-   task definition with a `containerOverrides` command
-   (`["bash", "-c", "airflow db migrate && airflow users create --username admin --firstname Admin --lastname User --role Admin --email admin@example.com --password <choose one>"]`),
-   `--launch-type FARGATE`, into the same subnets/`ecs_sg`, `assignPublicIp=ENABLED` (needed to reach
-   ECR).
+   task definition, into the same subnets/`ecs_sg` as the running services, `assignPublicIp=ENABLED`
+   (needed to reach ECR). Subnet IDs and the security group ID aren't exposed as Terraform outputs, so
+   look them up by the `Name`/`group-name` tags Terraform assigns them:
+   ```bash
+   ECS_CLUSTER=$(terraform -chdir=terraform output -raw ecs_cluster_name)
+   SUBNET_IDS=$(aws ec2 describe-subnets \
+     --filters "Name=tag:Name,Values=${ECS_CLUSTER}-public-a,${ECS_CLUSTER}-public-b" \
+     --query 'Subnets[].SubnetId' --output text | tr '\t' ',')
+   SG_ID=$(aws ec2 describe-security-groups \
+     --filters "Name=group-name,Values=${ECS_CLUSTER}-ecs-sg" \
+     --query 'SecurityGroups[0].GroupId' --output text)
+
+   aws ecs run-task \
+     --cluster "$ECS_CLUSTER" \
+     --task-definition "${ECS_CLUSTER}-scheduler" \
+     --launch-type FARGATE \
+     --network-configuration "awsvpcConfiguration={subnets=[$SUBNET_IDS],securityGroups=[$SG_ID],assignPublicIp=ENABLED}" \
+     --overrides '{"containerOverrides":[{"name":"scheduler","command":["bash","-c","airflow db migrate && airflow users create --username admin --firstname Admin --lastname User --role Admin --email admin@example.com --password <choose one>"]}]}'
+   ```
 2. **Warehouse database + pgvector**, from the operator's IP (paths below are repo-root relative —
    run from the repo root, as step 3 leaves you):
    ```bash
