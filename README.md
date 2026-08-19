@@ -401,7 +401,7 @@ cd ..   # remaining steps run from the repo root; terraform outputs below are re
 such provider per issuer URL per account, so if this AWS account already has a GitHub OIDC provider
 configured (e.g. left over from an unrelated project's CI setup), `terraform apply` above fails with
 `EntityAlreadyExists`. Fix: adopt the existing provider into this Terraform state instead of trying to
-create a second one, then re-apply — run from `terraform/` (where the failed `apply` above left you):
+create a second one, then re-apply — run from `terraform/`:
 
 ```bash
 terraform import aws_iam_openid_connect_provider.github \
@@ -409,11 +409,15 @@ terraform import aws_iam_openid_connect_provider.github \
 terraform apply
 ```
 
-In a **shared** AWS account, carry this through to teardown (step 11) too: if other repositories or
-projects depend on the same OIDC provider, a plain `terraform destroy` would delete it out from under
-them. From `terraform/`, run `terraform state rm aws_iam_openid_connect_provider.github` first so
-`destroy` leaves the shared provider alone — and re-run the `import` above at the start of your next
-session, since the state no longer tracks it.
+In a **shared** AWS account, two extra precautions: first, run `terraform plan` before that `apply`
+and read it — `terraform/oidc.tf` pins `client_id_list = ["sts.amazonaws.com"]`, so if the existing
+provider was configured with additional audiences another project relies on, applying this config
+would silently strip them (add those audiences to `client_id_list` locally before applying if so).
+Second, carry this through to teardown (step 11) too: if other repositories or projects depend on the
+same OIDC provider, a plain `terraform destroy` would delete it out from under them — run
+`terraform state rm aws_iam_openid_connect_provider.github` first (from `terraform/`) so `destroy`
+leaves it alone, and re-run the `import` above at the start of your next session, since the state no
+longer tracks it.
 
 ### 4. Populate the two operator-managed secrets
 
@@ -451,8 +455,8 @@ first. This is the same build `deploy.yml` (step 8) will later automate; doing i
 unblocks both the bootstrap task and the ECS services' first launch:
 
 ```bash
-# --region must match var.aws_region (terraform/variables.tf; default "us-east-1") — update both
-# occurrences below if you changed that variable
+# --region must match var.aws_region (terraform/variables.tf; default "us-east-1") — update it if
+# you changed that variable
 aws ecr get-login-password --region us-east-1 | \
   docker login --username AWS --password-stdin "$(terraform -chdir=terraform output -raw ecr_repository_url | cut -d/ -f1)"
 # --platform linux/amd64: the ECS task defs default to LINUX_X86_64 — required if you're building on
