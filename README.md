@@ -407,6 +407,7 @@ create a second one, then re-apply — run from `terraform/`:
 terraform import aws_iam_openid_connect_provider.github \
   arn:aws:iam::<account-id>:oidc-provider/token.actions.githubusercontent.com
 terraform apply
+cd ..   # back to repo root — remaining steps assume this, same as step 3 above
 ```
 
 In a **shared** AWS account, two extra precautions: first, run `terraform plan` before that `apply`
