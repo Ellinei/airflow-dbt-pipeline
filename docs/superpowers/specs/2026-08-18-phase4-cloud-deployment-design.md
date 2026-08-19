@@ -163,7 +163,10 @@ New `terraform/network.tf`:
   No NAT gateway, no private subnets.
 - `ecs_sg`: inbound TCP 8080 from `var.operator_ip/32` only; all outbound allowed (needed to reach
   ECR, RDS, S3, and Secrets Manager).
-- `rds_sg`: inbound TCP 5432 from `var.operator_ip/32` only.
+- `rds_sg`: inbound TCP 5432 from `var.operator_ip/32`, plus a second ingress rule that references
+  `ecs_sg` as the source security group (SG-to-SG, not a CIDR). Same-VPC traffic from the ECS tasks
+  resolves to the RDS instance's private IP, which never matches the `operator_ip/32` CIDR rule, so
+  the ECS tasks need this separate rule to reach RDS at all.
 - `var.operator_ip` is a required Terraform variable (no default) — the operator's current public IP,
   re-supplied on each `apply` if it changes between sessions.
 
@@ -355,7 +358,7 @@ GitHub repo ──(workflow_dispatch, OIDC)──► GitHub Actions ──build/
                         AWS Account (one region)
    VPC — 2 public subnets, 2 AZs, IGW + public route table, no NAT
 
-   SG: ecs_sg (in: 8080 from operator IP)     SG: rds_sg (in: 5432 from operator IP)
+   SG: ecs_sg (in: 8080 from operator IP)     SG: rds_sg (in: 5432 from operator IP + from ecs_sg)
 
    ECS Fargate "webserver" task ──┐                    ┌── ECS Fargate "scheduler" task
    (same image, cmd=webserver)    │                    │   (same image, cmd=scheduler)

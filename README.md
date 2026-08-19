@@ -352,7 +352,7 @@ GitHub repo ──(workflow_dispatch, OIDC)──► GitHub Actions ──build/
                         AWS Account (one region)
    VPC — 2 public subnets, 2 AZs, IGW + public route table, no NAT
 
-   SG: ecs_sg (in: 8080 from operator IP)     SG: rds_sg (in: 5432 from operator IP)
+   SG: ecs_sg (in: 8080 from operator IP)     SG: rds_sg (in: 5432 from operator IP + from ecs_sg)
 
    ECS Fargate "webserver" task ──┐                    ┌── ECS Fargate "scheduler" task
    (same image, cmd=webserver)    │                    │   (same image, cmd=scheduler)
@@ -377,8 +377,14 @@ GitHub repo ──(workflow_dispatch, OIDC)──► GitHub Actions ──build/
 - [Docker](https://docs.docker.com/get-docker/) installed and running locally — needed for the
   one-time manual image push in step 5 (subsequent redeploys use `deploy.yml`'s CI-hosted Docker
   instead)
+- `psql` (a PostgreSQL client) installed locally and on `PATH` — the bootstrap steps below shell out
+  to it directly (not via Docker), four separate invocations across steps 5.2 and 5.3
 - An AWS account
 - Your current public IPv4 address: `curl ifconfig.me`
+- The Olist CSVs already present at `data/olist/*.csv` before you reach step 7 — `data/` is
+  gitignored, so a fresh clone won't have them; see [Real-World Data Pipeline
+  (Olist)](#real-world-data-pipeline-olist) to download them (or run the local stack's `ingest_olist`
+  once) beforehand
 
 ### 3. First-time setup
 
@@ -389,6 +395,25 @@ terraform init
 terraform apply
 cd ..   # remaining steps run from the repo root; terraform outputs below are read via -chdir=terraform
 ```
+
+**Troubleshooting: `EntityAlreadyExists` on the OIDC provider.** `terraform/oidc.tf` creates an
+`aws_iam_openid_connect_provider` for `token.actions.githubusercontent.com`. AWS allows only **one**
+such provider per issuer URL per account, so if this AWS account already has a GitHub OIDC provider
+configured (e.g. left over from an unrelated project's CI setup), `terraform apply` above fails with
+`EntityAlreadyExists`. Fix: adopt the existing provider into this Terraform state instead of trying to
+create a second one, then re-apply — run from `terraform/` (where the failed `apply` above left you):
+
+```bash
+terraform import aws_iam_openid_connect_provider.github \
+  arn:aws:iam::<account-id>:oidc-provider/token.actions.githubusercontent.com
+terraform apply
+```
+
+In a **shared** AWS account, carry this through to teardown (step 11) too: if other repositories or
+projects depend on the same OIDC provider, a plain `terraform destroy` would delete it out from under
+them. From `terraform/`, run `terraform state rm aws_iam_openid_connect_provider.github` first so
+`destroy` leaves the shared provider alone — and re-run the `import` above at the start of your next
+session, since the state no longer tracks it.
 
 ### 4. Populate the two operator-managed secrets
 
@@ -405,6 +430,7 @@ RDS_PASS=$(aws secretsmanager get-secret-value --secret-id "$RDS_MASTER_SECRET" 
   --query SecretString --output text | python -c "import json,sys; print(json.load(sys.stdin)['password'])")
 RDS_ENDPOINT=$(terraform -chdir=terraform output -raw rds_endpoint)   # "host:port"
 RDS_HOST="${RDS_ENDPOINT%%:*}"                                        # bare host, for psql -h below
+export PGPASSWORD="$RDS_PASS"   # so the psql calls in step 5 don't prompt interactively for it
 
 aws secretsmanager put-secret-value \
   --secret-id "$(terraform -chdir=terraform output -raw app_secrets_arn)" \
@@ -425,9 +451,13 @@ first. This is the same build `deploy.yml` (step 8) will later automate; doing i
 unblocks both the bootstrap task and the ECS services' first launch:
 
 ```bash
+# --region must match var.aws_region (terraform/variables.tf; default "us-east-1") — update both
+# occurrences below if you changed that variable
 aws ecr get-login-password --region us-east-1 | \
   docker login --username AWS --password-stdin "$(terraform -chdir=terraform output -raw ecr_repository_url | cut -d/ -f1)"
-docker build -t "$(terraform -chdir=terraform output -raw ecr_repository_url):latest" .
+# --platform linux/amd64: the ECS task defs default to LINUX_X86_64 — required if you're building on
+# an ARM host (e.g. Apple Silicon), otherwise ECS can't pull the resulting image
+docker build --platform linux/amd64 -t "$(terraform -chdir=terraform output -raw ecr_repository_url):latest" .
 docker push "$(terraform -chdir=terraform output -raw ecr_repository_url):latest"
 ```
 
@@ -462,6 +492,8 @@ Three ordered steps, run once per fresh `terraform apply`:
    ```
 3. **Governance roles:**
    ```bash
+   export GOVERNANCE_ENGINEER_PASSWORD="<choose a password>"
+   export GOVERNANCE_ANALYST_PASSWORD="<choose a password>"
    psql -h "$RDS_HOST" -U "$RDS_USER" -d warehouse \
      -v engineer_password="$GOVERNANCE_ENGINEER_PASSWORD" \
      -v analyst_password="$GOVERNANCE_ANALYST_PASSWORD" \
@@ -501,6 +533,11 @@ aws ec2 describe-network-interfaces --network-interface-ids "$ENI_ID" \
   --query 'NetworkInterfaces[0].Association.PublicIp' --output text
 ```
 
+Note: `AIRFLOW__WEBSERVER__BASE_URL` isn't set anywhere in this deployment, so any links Airflow
+generates itself (e.g. in Slack alert messages) will point at `localhost` rather than the public IP
+above. This is an expected consequence of the no-ALB/no-stable-URL design (see the spec's Risks
+section) — there's no fixed hostname to set `BASE_URL` to in the first place — not a bug to fix.
+
 ### 10. Log in and trigger the pipeline
 
 Log in at `http://<public-ip>:8080` with the admin user created in step 5, unpause `dbt_pipeline`
@@ -510,6 +547,17 @@ render in the UI (proves remote S3 task logging is wired up correctly between th
 Fargate containers).
 
 ### 11. Teardown
+
+In a **shared** AWS account where other repositories/projects depend on the same GitHub OIDC provider
+(step 3's troubleshooting note), run this first so `destroy` below doesn't remove it out from under
+them — skip this in a dedicated/solo account, since it just means re-importing it next session for no
+benefit:
+
+```bash
+terraform -chdir=terraform state rm aws_iam_openid_connect_provider.github
+```
+
+Then, in all cases:
 
 ```bash
 terraform -chdir=terraform destroy
@@ -523,7 +571,10 @@ before the next session: 4 (secrets — the RDS master secret is regenerated by 
 `apply`), 5 (RDS bootstrap, image push included — new database, no migrate/admin-user/pgvector/
 governance state survives), 7 (Olist re-upload — new S3 bucket), and 8 (deploy — re-pushes the image
 via CI so later redeploys go back to being one command). Step 6 (GitHub setup) only needs redoing if
-the deploy role's ARN changed.
+the deploy role's ARN changed. In a **shared** AWS account where you `state rm`'d the OIDC provider
+before this `destroy` (see step 3's troubleshooting note), also redo the `terraform import` at the
+start of the next session — the provider itself is untouched, but this project's state no longer
+knows about it.
 
 ### Cost estimate
 
