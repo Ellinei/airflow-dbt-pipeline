@@ -331,6 +331,184 @@ Password: $WAREHOUSE_DB_PASSWORD  (see .env)
 
 ---
 
+## Cloud Deployment (AWS)
+
+Phase 4 adds an optional, fully-torn-down-between-sessions AWS deployment on top of the same
+Airflow + dbt + Postgres stack described above — a portfolio/demo deployment, not an always-on
+production environment. It's optimized for low cost and a clean `terraform destroy`, not scale or
+high availability: managed services (RDS, ECS Fargate, ECR, Secrets Manager) provisioned by
+Terraform, public subnets with no NAT gateway (security groups lock inbound traffic to the
+operator's own IP), and CI/CD deploys that only ever run on manual `workflow_dispatch` — pushing to
+`master` never touches AWS or costs money. Full design rationale lives in
+[`docs/superpowers/specs/2026-08-18-phase4-cloud-deployment-design.md`](docs/superpowers/specs/2026-08-18-phase4-cloud-deployment-design.md).
+
+### 1. Architecture
+
+```
+GitHub repo ──(workflow_dispatch, OIDC)──► GitHub Actions ──build/push──► ECR repo
+                                                              │
+                                                    update-service ×2 (force new deployment)
+                                                              ▼
+                        AWS Account (one region)
+   VPC — 2 public subnets, 2 AZs, IGW + public route table, no NAT
+
+   SG: ecs_sg (in: 8080 from operator IP)     SG: rds_sg (in: 5432 from operator IP)
+
+   ECS Fargate "webserver" task ──┐                    ┌── ECS Fargate "scheduler" task
+   (same image, cmd=webserver)    │                    │   (same image, cmd=scheduler)
+   public IP via ENI              │                    │   public IP via ENI
+                                   ▼                    ▼
+                     RDS PostgreSQL 15.x (public subnet, publicly_accessible)
+                       db: airflow (metadata)   db: warehouse (dbt + pgvector)
+
+                     S3 bucket: /task-logs/ (Airflow remote task logging)
+                                /olist-raw/ (9 CSVs, uploaded once by operator)
+
+                     CloudWatch Logs: /ecs/airflow-webserver, /ecs/airflow-scheduler
+                     Secrets Manager: RDS-managed master password (auto) +
+                                      one app-secrets JSON (Fernet key, webserver
+                                      secret key, OPENAI_API_KEY, Slack webhook)
+```
+
+### 2. Prerequisites
+
+- [AWS CLI](https://aws.amazon.com/cli/) installed and configured (`aws configure`, or an SSO login) with an account able to create the resources above
+- [Terraform](https://developer.hashicorp.com/terraform/downloads) `>= 1.5`
+- An AWS account
+- Your current public IPv4 address: `curl ifconfig.me`
+
+### 3. First-time setup
+
+```bash
+cd terraform
+cp terraform.tfvars.example terraform.tfvars   # fill in operator_ip and github_repo
+terraform init
+terraform apply
+cd ..   # remaining steps run from the repo root; terraform outputs below are read via -chdir=terraform
+```
+
+### 4. Populate the two operator-managed secrets
+
+Must happen after `apply` — both secrets below depend on the RDS master secret already existing:
+
+```bash
+# Fernet key — same command .env.example already documents for local dev:
+python -c "import base64, secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())"
+
+RDS_MASTER_SECRET=$(terraform -chdir=terraform output -raw rds_master_secret_arn)
+RDS_USER=$(aws secretsmanager get-secret-value --secret-id "$RDS_MASTER_SECRET" \
+  --query SecretString --output text | python -c "import json,sys; print(json.load(sys.stdin)['username'])")
+RDS_PASS=$(aws secretsmanager get-secret-value --secret-id "$RDS_MASTER_SECRET" \
+  --query SecretString --output text | python -c "import json,sys; print(json.load(sys.stdin)['password'])")
+RDS_ENDPOINT=$(terraform -chdir=terraform output -raw rds_endpoint)   # "host:port"
+RDS_HOST="${RDS_ENDPOINT%%:*}"                                        # bare host, for psql -h below
+
+aws secretsmanager put-secret-value \
+  --secret-id "$(terraform -chdir=terraform output -raw app_secrets_arn)" \
+  --secret-string "{\"fernet_key\":\"<paste from above>\",\"webserver_secret_key\":\"<generate the same way>\",\"openai_api_key\":\"<your key, or empty string>\",\"slack_webhook_url\":\"<your webhook, or empty string>\"}"
+
+aws secretsmanager put-secret-value \
+  --secret-id "$(terraform -chdir=terraform output -raw airflow_db_conn_secret_arn)" \
+  --secret-string "postgresql+psycopg2://${RDS_USER}:${RDS_PASS}@${RDS_ENDPOINT}/airflow"
+```
+
+### 5. One-time RDS bootstrap
+
+Three ordered steps, run once per fresh `terraform apply`:
+
+1. **Airflow metadata migrate + admin user**, via a one-off `aws ecs run-task` against the scheduler
+   task definition with a `containerOverrides` command
+   (`["bash", "-c", "airflow db migrate && airflow users create --username admin --firstname Admin --lastname User --role Admin --email admin@example.com --password <choose one>"]`),
+   `--launch-type FARGATE`, into the same subnets/`ecs_sg`, `assignPublicIp=ENABLED` (needed to reach
+   ECR).
+2. **Warehouse database + pgvector**, from the operator's IP (paths below are repo-root relative —
+   run from the repo root, as step 3 leaves you):
+   ```bash
+   psql -h "$RDS_HOST" -U "$RDS_USER" -d airflow -c "CREATE DATABASE warehouse;"
+   psql -h "$RDS_HOST" -U "$RDS_USER" -d warehouse -f warehouse-init/01_pgvector.sql
+   psql -h "$RDS_HOST" -U "$RDS_USER" -d warehouse -f warehouse-init/02_catalog_embeddings_unique_index.sql
+   ```
+3. **Governance roles:**
+   ```bash
+   psql -h "$RDS_HOST" -U "$RDS_USER" -d warehouse \
+     -v engineer_password="$GOVERNANCE_ENGINEER_PASSWORD" \
+     -v analyst_password="$GOVERNANCE_ANALYST_PASSWORD" \
+     -f governance/setup_roles.sql
+   ```
+
+### 6. One-time GitHub setup
+
+Set the `AWS_DEPLOY_ROLE_ARN` repo secret to `terraform -chdir=terraform output -raw github_deploy_role_arn`.
+
+### 7. Upload the Olist data once
+
+```bash
+aws s3 sync data/olist/ s3://$(terraform -chdir=terraform output -raw s3_bucket_name)/olist-raw/
+```
+
+### 8. Deploy
+
+Run the `deploy.yml` workflow manually — GitHub Actions UI ("Run workflow"), or:
+
+```bash
+gh workflow run deploy.yml
+```
+
+### 9. Find the webserver's public IP
+
+There's no stable URL without an Application Load Balancer (out of scope — see the spec's Risks
+section), so look it up after each deploy:
+
+```bash
+ECS_CLUSTER=$(terraform -chdir=terraform output -raw ecs_cluster_name)
+TASK_ARN=$(aws ecs list-tasks --cluster "$ECS_CLUSTER" \
+  --service-name "${ECS_CLUSTER}-webserver" --query 'taskArns[0]' --output text)
+ENI_ID=$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$TASK_ARN" \
+  --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' --output text)
+aws ec2 describe-network-interfaces --network-interface-ids "$ENI_ID" \
+  --query 'NetworkInterfaces[0].Association.PublicIp' --output text
+```
+
+### 10. Log in and trigger the pipeline
+
+Log in at `http://<public-ip>:8080` with the admin user created in step 5, unpause `dbt_pipeline`
+(it lands **paused** on first deploy, per the existing `DAGS_ARE_PAUSED_AT_CREATION=true` config —
+easy to mistake for a broken deploy if you don't expect it), trigger it, and confirm task logs
+render in the UI (proves remote S3 task logging is wired up correctly between the two separate
+Fargate containers).
+
+### 11. Teardown
+
+```bash
+terraform destroy
+```
+
+Full teardown between demo sessions — $0 standing cost. The accepted tradeoff is redoing steps 4-7
+(~10-15 min) before the next session.
+
+### Cost estimate
+
+Approximate `us-east-1` on-demand pricing — re-verify current rates before committing, since AWS
+pricing (especially the newer per-hour public IPv4 charge) changes over time.
+
+| Resource | If left running 24/7 | Notes |
+|---|---|---|
+| Fargate — webserver (0.5 vCPU / 1 GB) | ~$18/mo | |
+| Fargate — scheduler (1 vCPU / 2 GB) | ~$36/mo | dbt builds are more CPU/memory-hungry than the webserver; sized up deliberately |
+| RDS `db.t4g.micro` + 20 GB gp3 | ~$14/mo | bump to `db.t4g.small` (~+$12/mo) if the Olist build OOMs the micro class |
+| Public IPv4 (2 ECS ENIs + 1 RDS) | ~$11/mo | direct cost of public-subnets-no-NAT (§4) — still roughly a third of a NAT gateway's standing charge |
+| ECR storage | ~$0.30–0.40/mo | image is ~3–4 GB (see Risks) |
+| S3 (task logs + Olist raw data) | ~$0.05/mo | 121 MB Olist data + low log volume |
+| Secrets Manager | ~$0.80/mo | 1 RDS-managed secret + 1 app-secrets JSON |
+| CloudWatch Logs | ~$0.50/mo | short retention, low volume |
+| **Total if left running continuously** | **~$80–85/mo** | not the intended usage pattern |
+
+**Per demo session** (stand-up → bootstrap → trigger a run → review → `terraform destroy`, a few
+hours): roughly **$0.30–0.50 total**. Given the full-teardown decision, there is no standing cost
+between demo sessions at all.
+
+---
+
 ## Key Design Decisions
 
 | Decision | Rationale |
