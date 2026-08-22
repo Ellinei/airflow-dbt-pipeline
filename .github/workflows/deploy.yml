@@ -1,0 +1,49 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: airflow-dbt-pipeline
+  ECS_CLUSTER: airflow-dbt-pipeline
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+        run: |
+          docker build -t "$ECR_REGISTRY/$ECR_REPOSITORY:latest" \
+                        -t "$ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }}" .
+          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:latest"
+          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }}"
+
+      - name: Force new deployment (webserver)
+        run: |
+          aws ecs update-service --cluster "$ECS_CLUSTER" \
+            --service "${ECS_CLUSTER}-webserver" --force-new-deployment
+
+      - name: Force new deployment (scheduler)
+        run: |
+          aws ecs update-service --cluster "$ECS_CLUSTER" \
+            --service "${ECS_CLUSTER}-scheduler" --force-new-deployment
